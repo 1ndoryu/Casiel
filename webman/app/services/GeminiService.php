@@ -18,7 +18,9 @@ class GeminiService
         $this->apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/{$modelId}:generateContent?key={$apiKey}";
 
         $this->cliente = new Client([
-            'timeout'  => 60.0, // Damos más tiempo para el análisis de IA
+            'timeout' => 60.0, // Damos más tiempo para el análisis de IA
+            // Solución SSL: Apuntar al paquete de certificados CA.
+            'verify' => base_path() . '/config/certs/cacert.pem',
         ]);
     }
 

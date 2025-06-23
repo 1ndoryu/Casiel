@@ -1,5 +1,0 @@
-{
-    "require": {
-        "symfony/dotenv": "^7.3"
-    }
-}

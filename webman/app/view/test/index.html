@@ -1,96 +1,81 @@
 <!DOCTYPE html>
 <html lang="es">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Casiel - Interfaz de Pruebas</title>
-        <style>
-            body {
-                background-color: #1a1a1a;
-                color: #e0e0e0;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-                margin: 0;
-                padding: 2rem;
-                line-height: 1.6;
-            }
-            .container {
-                max-width: 800px;
-                margin: 0 auto;
-            }
-            h1,
-            h2 {
-                color: #ffffff;
-                border-bottom: 1px solid #444;
-                padding-bottom: 0.5rem;
-                font-weight: 500;
-            }
-            button {
-                background-color: #007bff;
-                color: white;
-                border: none;
-                padding: 12px 20px;
-                font-size: 1rem;
-                border-radius: 5px;
-                cursor: pointer;
-                transition: background-color 0.2s;
-                margin-bottom: 1.5rem;
-            }
-            button:hover {
-                background-color: #0056b3;
-            }
-            button:disabled {
-                background-color: #555;
-                cursor: not-allowed;
-            }
-            pre {
-                background-color: #252525;
-                border: 1px solid #444;
-                padding: 1rem;
-                border-radius: 5px;
-                white-space: pre-wrap;
-                word-wrap: break-word;
-                font-size: 0.9rem;
-                color: #d1d1d1;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Casiel - Interfaz de Pruebas</h1>
-            <button id="run-test">Procesar un Sample</button>
-
-            <h2>Respuesta de la Ejecución:</h2>
-            <pre id="response-output">Presiona el botón para iniciar el procesamiento de un sample pendiente...</pre>
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Casiel - Interfaz de Pruebas</title>
+    <style>
+        body { background-color: #1a1a1a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 2rem; line-height: 1.6; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1, h2 { color: #ffffff; border-bottom: 1px solid #444; padding-bottom: 0.5rem; font-weight: 500; }
+        .button-group { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        button { background-color: #007bff; color: white; border: none; padding: 12px 20px; font-size: 1rem; border-radius: 5px; cursor: pointer; transition: background-color 0.2s; }
+        button#force-test { background-color: #dc3545; }
+        button:hover { filter: brightness(1.2); }
+        button:disabled { background-color: #555; cursor: not-allowed; filter: none; }
+        pre { background-color: #252525; border: 1px solid #444; padding: 1rem; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; font-size: 0.9rem; color: #d1d1d1; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Casiel - Interfaz de Pruebas</h1>
+        <div class="button-group">
+            <button id="run-test">Procesar 1 Sample Pendiente/Fallido</button>
+            <button id="force-test">Forzar Procesamiento (Último Sample)</button>
         </div>
 
-        <script>
-            document.getElementById('run-test').addEventListener('click', function () {
-                const button = this;
-                const output = document.getElementById('response-output');
+        <h2>Respuesta de la Ejecución:</h2>
+        <pre id="response-output">Selecciona una acción para iniciar...</pre>
+    </div>
 
-                button.disabled = true;
-                button.textContent = 'Procesando...';
-                output.textContent = 'Ejecutando la prueba. Por favor, espera...';
+    <script>
+        const runTestBtn = document.getElementById('run-test');
+        const forceTestBtn = document.getElementById('force-test');
+        const output = document.getElementById('response-output');
+        const buttons = [runTestBtn, forceTestBtn];
 
-                fetch('/test/run', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest'
+        function setButtonsState(disabled, text) {
+            buttons.forEach(btn => {
+                btn.disabled = disabled;
+                if (text) {
+                    // Solo cambia el texto del botón clickeado
+                    if (btn.id === window.clickedButtonId) {
+                        btn.textContent = text;
                     }
-                })
-                    .then(response => response.json())
-                    .then(data => {
-                        output.textContent = JSON.stringify(data, null, 2);
-                    })
-                    .catch(error => {
-                        output.textContent = 'Error en la petición:\n' + error;
-                    })
-                    .finally(() => {
-                        button.disabled = false;
-                        button.textContent = 'Procesar un Sample';
-                    });
+                }
             });
-        </script>
-    </body>
+        }
+
+        function handleFetch(url, buttonId, processingText, originalText) {
+            window.clickedButtonId = buttonId;
+            setButtonsState(true, processingText);
+            output.textContent = 'Ejecutando la prueba. Por favor, espera...';
+
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+            })
+            .then(response => response.json())
+            .then(data => {
+                output.textContent = JSON.stringify(data, null, 2);
+            })
+            .catch(error => {
+                output.textContent = 'Error en la petición:\n' + error;
+            })
+            .finally(() => {
+                const clickedButton = document.getElementById(buttonId);
+                clickedButton.textContent = originalText;
+                setButtonsState(false);
+            });
+        }
+
+        runTestBtn.addEventListener('click', function () {
+            handleFetch('/test/run', 'run-test', 'Procesando...', 'Procesar 1 Sample Pendiente/Fallido');
+        });
+
+        forceTestBtn.addEventListener('click', function () {
+            handleFetch('/test/force-run', 'force-test', 'Forzando...', 'Forzar Procesamiento (Último Sample)');
+        });
+    </script>
+</body>
 </html>

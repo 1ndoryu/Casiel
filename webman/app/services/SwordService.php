@@ -4,6 +4,7 @@ namespace app\services;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Exception\RequestException;
 use InvalidArgumentException;
 
 /**
@@ -21,88 +22,98 @@ class SwordService
         }
 
         $this->cliente = new Client([
-            // MODIFICACIÓN: Aseguramos que la URL base siempre termine con un slash.
             'base_uri' => rtrim($apiUrl, '/') . '/',
             'timeout' => 10.0,
-            'verify' => false, // Para desarrollo local
+            'verify' => base_path() . '/config/certs/cacert.pem',
         ]);
         $this->apiKey = $apiKey;
     }
 
     /**
-     * Obtiene los samples que aún no han sido procesados por la IA.
-     * Busca los últimos 50 samples y filtra los que no tienen 'ia_status' en su metadata.
+     * Obtiene samples pendientes (sin ia_status) o que han fallado.
      */
-    public function obtenerSamplesPendientes(int $limite = 5): ?array
+    public function obtenerSamplesPendientes(int $limite = 1): ?array
     {
-        casielLog("Buscando samples sin procesar en Sword API.");
+        casielLog("Buscando samples pendientes o fallidos en Sword API.");
         try {
-            // 1. Pedimos los últimos samples, ya que la API no permite buscar por clave de metadata inexistente.
             $respuesta = $this->cliente->get('content', [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . $this->apiKey,
-                    'Accept'    => 'application/json',
-                ],
-                'query' => [
-                    'type'   => 'sample',
-                    'per_page' => 50, // Pedimos un lote más grande para tener de dónde filtrar.
-                    'sort_by' => 'created_at',
-                    'order'  => 'asc'
-                ]
+                'headers' => ['Authorization' => 'Bearer ' . $this->apiKey, 'Accept' => 'application/json'],
+                'query' => ['type' => 'sample', 'per_page' => 50, 'sort_by' => 'created_at', 'order' => 'desc']
             ]);
 
-            $datos = json_decode($respuesta->getBody()->getContents(), true);
+            $itemsRecibidos = (json_decode($respuesta->getBody()->getContents(), true))['data']['items'] ?? [];
 
-            if (empty($datos['data']['items'])) {
+            if (empty($itemsRecibidos)) {
+                casielLog("La API no devolvió ningún sample.");
                 return null;
             }
 
-            // 2. Filtramos los resultados en PHP.
-            $samplesPendientes = [];
-            foreach ($datos['data']['items'] as $sample) {
-                // Un sample está pendiente si NO TIENE la clave 'ia_status' en su metadata.
-                if (!isset($sample['metadata']['ia_status'])) {
-                    $samplesPendientes[] = $sample;
-                    if (count($samplesPendientes) >= $limite) {
-                        break; // Salimos si ya alcanzamos el límite deseado.
-                    }
+            $samplesFiltrados = [];
+            foreach ($itemsRecibidos as $sample) {
+                $status = $sample['metadata']['ia_status'] ?? null;
+                // Es pendiente si no tiene status, o si el status es de fallo.
+                if ($status === null || in_array($status, ['fallido', 'fallido_test'])) {
+                    $samplesFiltrados[] = $sample;
+                    if (count($samplesFiltrados) >= $limite) break;
                 }
             }
 
-            if (!empty($samplesPendientes)) {
-                casielLog("Se encontraron " . count($samplesPendientes) . " samples para procesar.");
-                return $samplesPendientes;
+            casielLog("Se encontraron " . count($samplesFiltrados) . " samples para procesar.");
+            return !empty($samplesFiltrados) ? $samplesFiltrados : null;
+        } catch (GuzzleException $e) {
+            $contextoError = [];
+            if ($e instanceof RequestException && $e->hasResponse()) {
+                $contextoError['response_body'] = (string) $e->getResponse()->getBody();
             }
+            casielLog("Error al conectar con Sword API: " . $e->getMessage(), $contextoError, 'error');
+            return null;
+        }
+    }
 
+    /**
+     * Obtiene el último sample subido, sin importar su estado.
+     */
+    public function obtenerUltimoSample(): ?array
+    {
+        casielLog("Buscando el último sample subido (modo forzado).");
+        try {
+            $respuesta = $this->cliente->get('content', [
+                'headers' => ['Authorization' => 'Bearer ' . $this->apiKey, 'Accept' => 'application/json'],
+                'query' => ['type' => 'sample', 'per_page' => 1, 'sort_by' => 'created_at', 'order' => 'desc']
+            ]);
+            $datos = json_decode($respuesta->getBody()->getContents(), true);
+            $sample = $datos['data']['items'][0] ?? null;
+            if ($sample) {
+                casielLog("Último sample encontrado con ID: " . $sample['id']);
+                return [$sample]; // Devolvemos como array para mantener consistencia
+            }
+            casielLog("No se encontró ningún sample.");
             return null;
         } catch (GuzzleException $e) {
-            casielLog("Error al conectar con Sword API: " . $e->getMessage(), [], 'error');
+            casielLog("Error al obtener el último sample: " . $e->getMessage(), [], 'error');
             return null;
         }
     }
 
     /**
      * Actualiza la metadata de un sample específico.
-     * @param int $id El ID del contenido (sample).
-     * @param array $metadata Los nuevos datos para el campo metadata.
      */
     public function actualizarMetadataSample(int $id, array $metadata): bool
     {
         casielLog("Actualizando metadata para el sample ID: $id.");
         try {
             $this->cliente->put("content/$id", [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . $this->apiKey,
-                    'Accept'    => 'application/json',
-                ],
-                'json' => [
-                    'metadata' => $metadata
-                ]
+                'headers' => ['Authorization' => 'Bearer ' . $this->apiKey, 'Accept' => 'application/json'],
+                'json' => ['metadata' => $metadata]
             ]);
             casielLog("Metadata del sample ID: $id actualizada correctamente.");
             return true;
         } catch (GuzzleException $e) {
-            casielLog("Error al actualizar el sample ID: $id. " . $e->getMessage(), [], 'error');
+            $contextoError = [];
+            if ($e instanceof RequestException && $e->hasResponse()) {
+                $contextoError['response_body'] = (string) $e->getResponse()->getBody();
+            }
+            casielLog("Error al actualizar el sample ID: $id. " . $e->getMessage(), $contextoError, 'error');
             return false;
         }
     }

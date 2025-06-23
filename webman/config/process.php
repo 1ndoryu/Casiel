@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of webman.
  *
@@ -6,10 +7,10 @@
  * For full copyright and license information, please see the MIT-LICENSE.txt
  * Redistributions of files must retain the above copyright notice.
  *
- * @author    walkor<walkor@workerman.net>
+ * @author  walkor<walkor@workerman.net>
  * @copyright walkor<walkor@workerman.net>
- * @link      http://www.workerman.net/
- * @license   http://www.opensource.org/licenses/mit-license.php MIT License
+ * @link   http://www.workerman.net/
+ * @license http://www.opensource.org/licenses/mit-license.php MIT License
  */
 
 use support\Log;
@@ -51,7 +52,10 @@ return [
             ], glob(base_path() . '/plugin/*/app'), glob(base_path() . '/plugin/*/config'), glob(base_path() . '/plugin/*/api')),
             // Files with these suffixes will be monitored
             'monitorExtensions' => [
-                'php', 'html', 'htm', 'env'
+                'php',
+                'html',
+                'htm',
+                'env'
             ],
             'options' => [
                 'enable_file_monitor' => !in_array('-d', $argv) && DIRECTORY_SEPARATOR === '/',
@@ -59,12 +63,14 @@ return [
             ]
         ]
     ],
-    // ======================= NUEVO PROCESO DE CASIEL =======================
-    'procesador-samples' => [
-        'handler' => app\process\ProcesadorSamples::class,
-        'count'   => 1, // Solo necesitamos una instancia de este proceso
-        'user'    => '',
-        'group'   => '',
-        'constructor' => []
-    ]
+    // ======================= PROCESO DE CASIEL (DESACTIVADO TEMPORALMENTE) =======================
+    /*
+  'procesador-samples' => [
+    'handler' => app\process\ProcesadorSamples::class,
+    'count' => 1, // Solo necesitamos una instancia de este proceso
+    'user'  => '',
+    'group' => '',
+    'constructor' => []
+  ]
+  */
 ];
