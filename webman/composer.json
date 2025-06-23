@@ -27,7 +27,8 @@
     "php": ">=8.1",
     "workerman/webman-framework": "^2.1",
     "monolog/monolog": "^2.0",
-    "guzzlehttp/guzzle": "^7.9"
+    "guzzlehttp/guzzle": "^7.9",
+    "vlucas/phpdotenv": "^5.6"
   },
   "suggest": {
     "ext-event": "For better performance. "

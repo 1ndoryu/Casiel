@@ -11,51 +11,25 @@ use app\services\GeminiService;
  */
 class ProcesadorSamples
 {
-    private SwordService $swordService;
-    private GeminiService $geminiService;
-    private string $swordBaseUrl;
-
-    /**
-     * Parsea manualmente un archivo .env y devuelve un array asociativo.
-     * @param string $path La ruta completa al archivo .env.
-     * @return array La configuración parseada.
-     */
-    private function parseEnvFile(string $path): array
-    {
-        $config = [];
-        if (!file_exists($path) || !is_readable($path)) {
-            casielLog("El archivo .env no existe o no se puede leer en: $path", [], 'error');
-            return $config;
-        }
-
-        $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        foreach ($lines as $line) {
-            if (strpos(trim($line), '#') === 0) {
-                continue;
-            }
-            if (strpos($line, '=') === false) {
-                continue;
-            }
-
-            list($key, $value) = explode('=', $line, 2);
-            $config[trim($key)] = trim($value);
-        }
-        return $config;
-    }
+    private ?SwordService $swordService = null;
+    private ?GeminiService $geminiService = null;
+    private ?string $swordBaseUrl = null;
 
     public function onWorkerStart()
     {
-        // SOLUCIÓN DEFINITIVA: Parsear el .env manualmente para evitar los problemas
-        // con getenv() en los workers de Windows.
-        $envPath = base_path() . DIRECTORY_SEPARATOR . '.env';
-        $config = $this->parseEnvFile($envPath);
+        // Se utiliza el sistema de configuración de Webman.
+        $this->swordBaseUrl = config('api.sword.base_url');
+        $swordApiUrl      = config('api.sword.api_url');
+        $swordApiKey      = config('api.sword.api_key');
+        $geminiApiKey     = config('api.gemini.api_key');
+        $geminiModelId    = config('api.gemini.model_id', 'gemini-1.5-flash-latest');
 
-        $this->swordBaseUrl = $config['SWORD_BASE_URL'] ?? '';
-        $swordApiUrl = $config['SWORD_API_URL'] ?? '';
-        $swordApiKey = $config['SWORD_API_KEY'] ?? '';
-        $geminiApiKey = $config['API_GEMINI'] ?? '';
-        $geminiModelId = 'gemini-1.5-flash-latest';
-
+        // Verificación robusta de la configuración
+        if (empty($this->swordBaseUrl) || empty($swordApiUrl) || empty($swordApiKey) || empty($geminiApiKey)) {
+            casielLog("Configuración de API (.env) incompleta o no cargada en el worker. REVISAR .env Y php.ini (variables_order debe incluir 'E')", [], 'error');
+            return; // Detiene la inicialización del worker si la config es inválida
+        }
+        
         // Inyectar la configuración en los servicios.
         $this->swordService = new SwordService($swordApiUrl, $swordApiKey);
         $this->geminiService = new GeminiService($geminiApiKey, $geminiModelId);
@@ -73,6 +47,12 @@ class ProcesadorSamples
      */
     public function procesar()
     {
+        // Añadimos una guarda para no ejecutar si los servicios no se iniciaron.
+        if (!$this->swordService || !$this->geminiService) {
+            casielLog("Los servicios no fueron inicializados debido a un error de configuración. Saltando ciclo de procesamiento.", [], 'warning');
+            return;
+        }
+
         casielLog("Ejecutando ciclo de procesamiento de samples...");
         $samples = $this->swordService->obtenerSamplesPendientes(5);
 

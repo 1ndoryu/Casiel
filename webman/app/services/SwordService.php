@@ -17,46 +17,63 @@ class SwordService
     public function __construct(string $apiUrl, string $apiKey)
     {
         if (empty($apiUrl)) {
-            throw new InvalidArgumentException("La URL de la API de Sword no puede estar vacía. Revisa tu .env y config/api.php.");
+            throw new InvalidArgumentException("La URL de la API de Sword no puede estar vacía. Revisa tu .env.");
         }
 
         $this->cliente = new Client([
-            'base_uri' => $apiUrl,
-            'timeout'  => 10.0,
+            // MODIFICACIÓN: Aseguramos que la URL base siempre termine con un slash.
+            'base_uri' => rtrim($apiUrl, '/') . '/',
+            'timeout' => 10.0,
+            'verify' => false, // Para desarrollo local
         ]);
         $this->apiKey = $apiKey;
     }
 
     /**
-     * Obtiene los samples pendientes de procesar por la IA.
-     * Se asumirá que los samples pendientes tienen `metadata->ia_status = 'pendiente'`.
+     * Obtiene los samples que aún no han sido procesados por la IA.
+     * Busca los últimos 50 samples y filtra los que no tienen 'ia_status' en su metadata.
      */
     public function obtenerSamplesPendientes(int $limite = 5): ?array
     {
-        casielLog("Buscando samples pendientes en Sword API.");
+        casielLog("Buscando samples sin procesar en Sword API.");
         try {
+            // 1. Pedimos los últimos samples, ya que la API no permite buscar por clave de metadata inexistente.
             $respuesta = $this->cliente->get('content', [
                 'headers' => [
                     'Authorization' => 'Bearer ' . $this->apiKey,
-                    'Accept'        => 'application/json',
+                    'Accept'    => 'application/json',
                 ],
                 'query' => [
-                    'type' => 'sample',
-                    'metadata[ia_status]' => 'pendiente',
-                    'per_page' => $limite,
+                    'type'   => 'sample',
+                    'per_page' => 50, // Pedimos un lote más grande para tener de dónde filtrar.
                     'sort_by' => 'created_at',
-                    'order' => 'asc'
+                    'order'  => 'asc'
                 ]
             ]);
 
             $datos = json_decode($respuesta->getBody()->getContents(), true);
 
-            if (!empty($datos['data']['items'])) {
-                casielLog("Se encontraron " . count($datos['data']['items']) . " samples pendientes.");
-                return $datos['data']['items'];
+            if (empty($datos['data']['items'])) {
+                return null;
             }
 
-            casielLog("No se encontraron samples pendientes.");
+            // 2. Filtramos los resultados en PHP.
+            $samplesPendientes = [];
+            foreach ($datos['data']['items'] as $sample) {
+                // Un sample está pendiente si NO TIENE la clave 'ia_status' en su metadata.
+                if (!isset($sample['metadata']['ia_status'])) {
+                    $samplesPendientes[] = $sample;
+                    if (count($samplesPendientes) >= $limite) {
+                        break; // Salimos si ya alcanzamos el límite deseado.
+                    }
+                }
+            }
+
+            if (!empty($samplesPendientes)) {
+                casielLog("Se encontraron " . count($samplesPendientes) . " samples para procesar.");
+                return $samplesPendientes;
+            }
+
             return null;
         } catch (GuzzleException $e) {
             casielLog("Error al conectar con Sword API: " . $e->getMessage(), [], 'error');
@@ -76,7 +93,7 @@ class SwordService
             $this->cliente->put("content/$id", [
                 'headers' => [
                     'Authorization' => 'Bearer ' . $this->apiKey,
-                    'Accept'        => 'application/json',
+                    'Accept'    => 'application/json',
                 ],
                 'json' => [
                     'metadata' => $metadata

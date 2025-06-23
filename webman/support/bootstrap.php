@@ -42,17 +42,12 @@ if ($worker) {
     }, time());
 }
 
-// ========= SECCIÓN MODIFICADA =========
-// La función `base_path()` sin argumentos apunta al directorio correcto ('webman/'),
-// donde se encuentra tu archivo .env.
-if (class_exists('Dotenv\Dotenv') && file_exists(base_path() . '/.env')) {
-    if (method_exists('Dotenv\Dotenv', 'createUnsafeMutable')) {
-        Dotenv::createUnsafeMutable(base_path())->load();
-    } else {
-        Dotenv::createMutable(base_path())->load();
-    }
+$project_root_path = __DIR__ . '/../';
+
+if (class_exists('Dotenv\Dotenv') && file_exists($project_root_path . '.env')) {
+    $dotenv = Dotenv::createUnsafeMutable($project_root_path);
+    $dotenv->load();
 }
-// ========= FIN DE LA SECCIÓN MODIFICADA =========
 
 Config::clear();
 support\App::loadAllConfig(['route']);
