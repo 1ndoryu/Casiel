@@ -11,15 +11,11 @@ use GuzzleHttp\Exception\GuzzleException;
 class GeminiService
 {
     protected Client $cliente;
-    protected string $apiKey;
-    protected string $modelId;
     protected string $apiUrl;
 
-    public function __construct()
+    public function __construct(string $apiKey, string $modelId)
     {
-        $this->apiKey = $_ENV['API_GEMINI'];
-        $this->modelId = 'gemini-2.0-flash'; // Usamos un modelo potente y rápido
-        $this->apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/{$this->modelId}:generateContent?key={$this->apiKey}";
+        $this->apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/{$modelId}:generateContent?key={$apiKey}";
 
         $this->cliente = new Client([
             'timeout'  => 60.0, // Damos más tiempo para el análisis de IA
@@ -28,7 +24,7 @@ class GeminiService
 
     /**
      * Analiza un archivo de audio a partir de su URL y devuelve un JSON con la metadata.
-     * * @param string $urlAudio La URL pública del archivo de audio.
+     * @param string $urlAudio La URL pública del archivo de audio.
      * @return array|null La metadata generada en formato de array o null si hay error.
      */
     public function analizarAudio(string $urlAudio): ?array

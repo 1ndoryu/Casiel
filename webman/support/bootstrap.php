@@ -6,10 +6,10 @@
  * For full copyright and license information, please see the MIT-LICENSE.txt
  * Redistributions of files must retain the above copyright notice.
  *
- * @author    walkor<walkor@workerman.net>
+ * @author  walkor<walkor@workerman.net>
  * @copyright walkor<walkor@workerman.net>
- * @link      http://www.workerman.net/
- * @license   http://www.opensource.org/licenses/mit-license.php MIT License
+ * @link    http://www.workerman.net/
+ * @license http://www.opensource.org/licenses/mit-license.php MIT License
  */
 
 use Dotenv\Dotenv;
@@ -42,13 +42,17 @@ if ($worker) {
     }, time());
 }
 
-if (class_exists('Dotenv\Dotenv') && file_exists(base_path(false) . '/.env')) {
+// ========= SECCIÓN MODIFICADA =========
+// La función `base_path()` sin argumentos apunta al directorio correcto ('webman/'),
+// donde se encuentra tu archivo .env.
+if (class_exists('Dotenv\Dotenv') && file_exists(base_path() . '/.env')) {
     if (method_exists('Dotenv\Dotenv', 'createUnsafeMutable')) {
-        Dotenv::createUnsafeMutable(base_path(false))->load();
+        Dotenv::createUnsafeMutable(base_path())->load();
     } else {
-        Dotenv::createMutable(base_path(false))->load();
+        Dotenv::createMutable(base_path())->load();
     }
 }
+// ========= FIN DE LA SECCIÓN MODIFICADA =========
 
 Config::clear();
 support\App::loadAllConfig(['route']);
@@ -136,4 +140,3 @@ foreach (Util::scanDir($directory) as $path) {
     }
 }
 Route::load($paths);
-

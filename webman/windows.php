@@ -67,12 +67,15 @@ function write_process_file($runtimeProcessPath, $processName, $firm): string
     $configParam = $firm ? "config('plugin.$firm.process')['$processName']" : "config('process')['$processName']";
     $fileContent = <<<EOF
 <?php
+// ========== INICIO DE LA MODIFICACIÓN ==========
+// Se añade el bootstrap.php para asegurar que TODOS los procesos (incluidos los de fondo)
+// carguen la configuración del entorno (.env) y los archivos de arranque necesarios.
 require_once __DIR__ . '/../../vendor/autoload.php';
+require_once __DIR__ . '/../../support/bootstrap.php';
+// ========== FIN DE LA MODIFICACIÓN ==========
 
 use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
-use Webman\Config;
-use support\App;
 
 ini_set('display_errors', 'on');
 error_reporting(E_ALL);
@@ -81,15 +84,8 @@ if (is_callable('opcache_reset')) {
     opcache_reset();
 }
 
-if (!\$appConfigFile = config_path('app.php')) {
-    throw new RuntimeException('Config file not found: app.php');
-}
-\$appConfig = require \$appConfigFile;
-if (\$timezone = \$appConfig['default_timezone'] ?? '') {
-    date_default_timezone_set(\$timezone);
-}
-
-App::loadAllConfig(['route']);
+// Ya no necesitamos cargar la configuración aquí, porque bootstrap.php ya lo hace.
+// App::loadAllConfig(['route']);
 
 worker_start('$processParam', $configParam);
 

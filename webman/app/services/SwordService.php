@@ -4,6 +4,7 @@ namespace app\services;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use InvalidArgumentException;
 
 /**
  * Servicio para interactuar con la API de Sword (Kamples).
@@ -13,18 +14,21 @@ class SwordService
     protected Client $cliente;
     protected string $apiKey;
 
-    public function __construct()
+    public function __construct(string $apiUrl, string $apiKey)
     {
+        if (empty($apiUrl)) {
+            throw new InvalidArgumentException("La URL de la API de Sword no puede estar vacía. Revisa tu .env y config/api.php.");
+        }
+
         $this->cliente = new Client([
-            'base_uri' => $_ENV['SWORD_API_URL'],
+            'base_uri' => $apiUrl,
             'timeout'  => 10.0,
         ]);
-        $this->apiKey = $_ENV['SWORD_API_KEY'];
+        $this->apiKey = $apiKey;
     }
 
     /**
      * Obtiene los samples pendientes de procesar por la IA.
-     * * TODO: Implementar el filtro correcto. Por ahora, obtiene los últimos.
      * Se asumirá que los samples pendientes tienen `metadata->ia_status = 'pendiente'`.
      */
     public function obtenerSamplesPendientes(int $limite = 5): ?array
@@ -38,7 +42,7 @@ class SwordService
                 ],
                 'query' => [
                     'type' => 'sample',
-                    'metadata[ia_status]' => 'pendiente', // Asumiendo este filtro
+                    'metadata[ia_status]' => 'pendiente',
                     'per_page' => $limite,
                     'sort_by' => 'created_at',
                     'order' => 'asc'
@@ -62,7 +66,7 @@ class SwordService
 
     /**
      * Actualiza la metadata de un sample específico.
-     * * @param int $id El ID del contenido (sample).
+     * @param int $id El ID del contenido (sample).
      * @param array $metadata Los nuevos datos para el campo metadata.
      */
     public function actualizarMetadataSample(int $id, array $metadata): bool
