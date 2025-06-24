@@ -14,6 +14,8 @@ class SwordService
 {
     protected Client $cliente;
     protected string $apiKey;
+    // Constante para el máximo de reintentos
+    private const MAX_REINTENTOS_IA = 3;
 
     public function __construct(string $apiUrl, string $apiKey)
     {
@@ -30,7 +32,7 @@ class SwordService
     }
 
     /**
-     * Obtiene samples pendientes (sin ia_status) o que han fallado.
+     * Obtiene samples pendientes (sin ia_status), que han fallado o no han excedido el límite de reintentos.
      */
     public function obtenerSamplesPendientes(int $limite = 1): ?array
     {
@@ -50,9 +52,12 @@ class SwordService
 
             $samplesFiltrados = [];
             foreach ($itemsRecibidos as $sample) {
-                $status = $sample['metadata']['ia_status'] ?? null;
-                // Es pendiente si no tiene status, o si el status es de fallo.
-                if ($status === null || in_array($status, ['fallido', 'fallido_test'])) {
+                $metadata = $sample['metadata'] ?? [];
+                $status = $metadata['ia_status'] ?? null;
+                $retryCount = $metadata['ia_retry_count'] ?? 0;
+
+                // Es pendiente si: no tiene status, O el status es de fallo Y no ha superado los reintentos.
+                if ($status === null || (in_array($status, ['fallido', 'fallido_test']) && $retryCount < self::MAX_REINTENTOS_IA)) {
                     $samplesFiltrados[] = $sample;
                     if (count($samplesFiltrados) >= $limite) break;
                 }

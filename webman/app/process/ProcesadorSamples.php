@@ -5,6 +5,7 @@ namespace app\process;
 use Workerman\Timer;
 use app\services\SwordService;
 use app\services\GeminiService;
+use app\utils\AudioUtil; // Importar
 
 /**
  * Proceso de fondo para buscar y analizar samples de audio con IA.
@@ -13,27 +14,22 @@ class ProcesadorSamples
 {
     private ?SwordService $swordService = null;
     private ?GeminiService $geminiService = null;
+    private ?AudioUtil $audioUtil = null; // Añadir
     private ?string $swordBaseUrl = null;
 
     public function onWorkerStart()
     {
-        // Se utiliza el sistema de configuración de Webman.
+        // Inyectar la configuración en los servicios.
+        $this->swordService = new SwordService(config('api.sword.api_url'), config('api.sword.api_key'));
+        $this->geminiService = new GeminiService(config('api.gemini.api_key'), config('api.gemini.model_id'));
+        $this->audioUtil = new AudioUtil();
         $this->swordBaseUrl = config('api.sword.base_url');
-        $swordApiUrl      = config('api.sword.api_url');
-        $swordApiKey      = config('api.sword.api_key');
-        $geminiApiKey     = config('api.gemini.api_key');
-        $geminiModelId    = config('api.gemini.model_id', 'gemini-1.5-flash-latest');
 
-        // Verificación robusta de la configuración
-        if (empty($this->swordBaseUrl) || empty($swordApiUrl) || empty($swordApiKey) || empty($geminiApiKey)) {
-            casielLog("Configuración de API (.env) incompleta o no cargada en el worker. REVISAR .env Y php.ini (variables_order debe incluir 'E')", [], 'error');
-            return; // Detiene la inicialización del worker si la config es inválida
+        if (empty($this->swordBaseUrl) || !config('api.sword.api_key') || !config('api.gemini.api_key')) {
+            casielLog("Configuración de API (.env) incompleta. El worker no se iniciará.", [], 'alert');
+            return;
         }
         
-        // Inyectar la configuración en los servicios.
-        $this->swordService = new SwordService($swordApiUrl, $swordApiKey);
-        $this->geminiService = new GeminiService($geminiApiKey, $geminiModelId);
-
         casielLog("Iniciando Proceso de Samples. Buscando cada 60 segundos.");
 
         $this->procesar(); // Ejecutar inmediatamente al iniciar
@@ -47,13 +43,12 @@ class ProcesadorSamples
      */
     public function procesar()
     {
-        // Añadimos una guarda para no ejecutar si los servicios no se iniciaron.
-        if (!$this->swordService || !$this->geminiService) {
-            casielLog("Los servicios no fueron inicializados debido a un error de configuración. Saltando ciclo de procesamiento.", [], 'warning');
+        if (!$this->swordService || !$this->geminiService || !$this->audioUtil) {
+            casielLog("Los servicios no fueron inicializados. Saltando ciclo.", [], 'warning');
             return;
         }
 
-        casielLog("Ejecutando ciclo de procesamiento de samples...");
+        casielLog("Ejecutando ciclo de procesamiento...");
         $samples = $this->swordService->obtenerSamplesPendientes(5);
 
         if (empty($samples)) {
@@ -63,24 +58,55 @@ class ProcesadorSamples
 
         foreach ($samples as $sample) {
             $idSample = $sample['id'];
-            $metadataActual = $sample['metadata'] ?? [];
-            $urlAudio = $metadataActual['url_archivo'] ?? null;
+            $this->procesarSampleIndividual($sample, $idSample);
+        }
+    }
 
-            if (!$urlAudio) {
-                casielLog("El sample ID: $idSample no tiene 'url_archivo'. Saltando.", [], 'warning');
-                continue;
-            }
+    private function procesarSampleIndividual(array $sample, int $idSample)
+    {
+        $metadataActual = $sample['metadata'] ?? [];
+        $urlAudioOriginal = $metadataActual['url_archivo'] ?? null;
+        
+        if (!$urlAudioOriginal) {
+            casielLog("El sample ID: $idSample no tiene 'url_archivo'. Saltando.", ['sample_id' => $idSample], 'warning');
+            return;
+        }
 
-            $urlCompletaAudio = rtrim($this->swordBaseUrl, '/') . $urlAudio;
-            $metadataGenerada = $this->geminiService->analizarAudio($urlCompletaAudio);
+        $nombreOriginal = basename($urlAudioOriginal);
+        $this->swordService->actualizarMetadataSample($idSample, array_merge($metadataActual, ['ia_status' => 'procesando']));
 
-            if ($metadataGenerada) {
-                $metadataFinal = array_merge($metadataActual, $metadataGenerada, ['ia_status' => 'completado']);
-                $this->swordService->actualizarMetadataSample($idSample, $metadataFinal);
-            } else {
-                $metadataActual['ia_status'] = 'fallido';
-                $this->swordService->actualizarMetadataSample($idSample, $metadataActual);
-            }
+        try {
+            $urlCompletaAudio = rtrim($this->swordBaseUrl, '/') . $urlAudioOriginal;
+            $resultadoAudio = $this->audioUtil->procesarDesdeUrl($urlCompletaAudio, $nombreOriginal);
+            if (!$resultadoAudio) throw new \Exception("Fallo en AudioUtil.");
+
+            $archivoSubido = $this->swordService->subirArchivo($resultadoAudio['ruta_mp3'], $resultadoAudio['nombre_mp3']);
+            if (!$archivoSubido) throw new \Exception("Fallo al subir MP3 a Sword.");
+            
+            unlink($resultadoAudio['ruta_mp3']);
+
+            $contextoIA = ['titulo' => $sample['titulo'], 'metadata_tecnica' => $resultadoAudio['metadata_tecnica']];
+            $metadataGeneradaIA = $this->geminiService->analizarAudio($resultadoAudio['ruta_mp3'], $contextoIA);
+            if (!$metadataGeneradaIA) throw new \Exception("Fallo en el análisis de Gemini.");
+
+            $metadataFinal = array_merge(
+                $metadataActual,
+                $resultadoAudio['metadata_tecnica'],
+                $metadataGeneradaIA,
+                [
+                    'ia_status' => 'completado',
+                    'url_archivo_ligero' => $archivoSubido['url'],
+                    'nombre_archivo_original' => $resultadoAudio['nombre_original']
+                ]
+            );
+            
+            $this->swordService->actualizarMetadataSample($idSample, $metadataFinal);
+            casielLog("Sample ID: $idSample procesado con éxito.", ['sample_id' => $idSample]);
+
+        } catch (\Throwable $e) {
+            $metadataError = array_merge($metadataActual, ['ia_status' => 'fallido']);
+            $this->swordService->actualizarMetadataSample($idSample, $metadataError);
+            casielLog("Error procesando sample ID: $idSample. Causa: " . $e->getMessage(), ['sample_id' => $idSample], 'error');
         }
     }
 }

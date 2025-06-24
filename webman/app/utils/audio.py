@@ -1,49 +1,44 @@
-import essentia.standard as es
+import sys
 import json
+import essentia.standard as es
+from essentia import EssentiaException
 
 def analizar_audio(audio_path):
-    try:
-        audio = es.MonoLoader(filename=audio_path)()
-        print(f"Audio cargado correctamente. Longitud: {len(audio)} muestras.")
+  try:
+    # Cargar el audio
+    loader = es.MonoLoader(filename=audio_path)
+    audio = loader()
 
-        # Extraer BPM
-        rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
-        bpm, _, _, _, _ = rhythm_extractor(audio)
-        bpm = round(bpm)  # Redondear el BPM al entero más cercano
-        print(f"BPM detectado: {bpm}")
+    # Extraer BPM
+    rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
+    bpm, _, _, _, _ = rhythm_extractor(audio)
 
-        # Extraer tono
-        pitch_extractor = es.PredominantPitchMelodia()
-        pitch, _ = pitch_extractor(audio)
-        print(f"Pitch (tono) detectado: {pitch[:10]}")
+    # Extraer Tonalidad
+    key_extractor = es.KeyExtractor()
+    key, scale, strength = key_extractor(audio)
 
-        # Otros datos relevantes
-        key_extractor = es.KeyExtractor()
-        key, scale, strength = key_extractor(audio)
-        print(f"Clave detectada: {key}, Escala: {scale}, Fuerza: {strength}")
+    # Crear diccionario con resultados. Redondeamos el BPM.
+    resultados = {
+      "bpm": round(bpm),
+      "tonalidad": key,
+      "escala": scale,
+      "precision_tonalidad": strength
+    }
+   
+    # Devolver el resultado como una cadena JSON en la salida estándar
+    print(json.dumps(resultados))
 
-        # Crear un diccionario con los resultados
-        resultados = {
-            "bpm": bpm,
-            "pitch": pitch.tolist(),
-            "key": key,
-            "scale": scale,
-            "strength": strength
-        }
+  except EssentiaException as e:
+    # Enviar errores a la salida de error estándar y salir con código de error
+    print(f"Error de Essentia al procesar {audio_path}: {e}", file=sys.stderr)
+    sys.exit(1)
+  except Exception as e:
+    print(f"Error inesperado en script Python: {e}", file=sys.stderr)
+    sys.exit(1)
 
-        # Guardar los resultados en un archivo JSON
-        with open(audio_path + '_resultados.json', 'w') as f:
-            json.dump(resultados, f)
-        print("Archivo JSON guardado correctamente.")
-
-        return resultados
-
-    except Exception as e:
-        print(f"Error durante el análisis del audio: {e}")
-
-# Ejemplo de uso
-if __name__ == "__main__":  
-    import sys
-    audio_path = sys.argv[1]
-    resultados = analizar_audio(audio_path)
-    print(resultados)
+if __name__ == "__main__":
+  if len(sys.argv) > 1:
+    analizar_audio(sys.argv[1])
+  else:
+    print("Uso: python audio.py <ruta_del_archivo_de_audio>", file=sys.stderr)
+    sys.exit(1)

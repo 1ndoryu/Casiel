@@ -11,8 +11,8 @@ return [
         // Ruta al script de análisis de audio.
         'script_path' => base_path() . '/app/utils/audio.py',
 
-        // Ruta al ejecutable de FFMPEG.
-        'ffmpeg_path' => '/usr/bin/ffmpeg',
+        // Ruta al ejecutable de FFMPEG. Leído desde el .env para mayor flexibilidad.
+        'ffmpeg_path' => $_ENV['FFMPEG_PATH'] ?? 'ffmpeg',
 
         // Directorio temporal para descargar y procesar los archivos de audio.
         'temp_dir' => runtime_path() . '/tmp/audio',
