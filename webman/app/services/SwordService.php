@@ -23,7 +23,7 @@ class SwordService
 
         $this->cliente = new Client([
             'base_uri' => rtrim($apiUrl, '/') . '/',
-            'timeout' => 10.0,
+            'timeout' => 30.0, // Aumentado por si la subida tarda
             'verify' => base_path() . '/config/certs/cacert.pem',
         ]);
         $this->apiKey = $apiKey;
@@ -115,6 +115,35 @@ class SwordService
             }
             casielLog("Error al actualizar el sample ID: $id. " . $e->getMessage(), $contextoError, 'error');
             return false;
+        }
+    }
+
+    /**
+     * Sube un archivo al endpoint /media de Sword.
+     * @param string $rutaArchivo Path local del archivo a subir.
+     * @param string $nombreArchivo Nombre que tendrá el archivo en el servidor.
+     * @return array|null Los datos del archivo subido o null en caso de error.
+     */
+    public function subirArchivo(string $rutaArchivo, string $nombreArchivo): ?array
+    {
+        casielLog("Subiendo archivo a Sword: $nombreArchivo");
+        try {
+            $respuesta = $this->cliente->post('media', [
+                'headers' => ['Authorization' => 'Bearer ' . $this->apiKey],
+                'multipart' => [
+                    [
+                        'name'     => 'file',
+                        'contents' => fopen($rutaArchivo, 'r'),
+                        'filename' => $nombreArchivo
+                    ]
+                ]
+            ]);
+            $cuerpoRespuesta = json_decode($respuesta->getBody()->getContents(), true);
+            casielLog("Archivo subido con éxito a Sword.", $cuerpoRespuesta);
+            return $cuerpoRespuesta['data'] ?? null;
+        } catch (GuzzleException $e) {
+            casielLog("Error al subir el archivo a Sword: " . $e->getMessage(), [], 'error');
+            return null;
         }
     }
 }
