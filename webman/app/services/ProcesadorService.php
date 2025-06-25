@@ -24,7 +24,7 @@ class ProcesadorService
     }
 
     /**
-     * (NUEVO) Valida y sanea la metadata devuelta por la IA para asegurar que los tipos de datos son correctos.
+     * Valida y sanea la metadata devuelta por la IA para asegurar que los tipos de datos son correctos.
      * @param array $metadata La data cruda de Gemini.
      * @return array La data saneada.
      */
@@ -89,7 +89,7 @@ class ProcesadorService
             throw new \Exception("El sample ID: $idSample no tiene 'url_archivo' en su metadata.");
         }
 
-        $this->swordService->actualizarMetadataSample($idSample, ['ia_status' => 'procesando' . $statusSuffix]);
+        $this->swordService->actualizarMetadataSample($idSample, array_merge($metadataActual, ['ia_status' => 'procesando' . $statusSuffix]));
         $log['paso1_marcar_procesando'] = "Sample ID: $idSample marcado como 'procesando{$statusSuffix}'.";
 
         try {
@@ -105,12 +105,7 @@ class ProcesadorService
             if (!$metadataGeneradaIA || empty($metadataGeneradaIA['nombre_archivo_base'])) {
                 throw new \Exception("El análisis de Gemini falló o no devolvió un 'nombre_archivo_base'.");
             }
-
-            // ========== INICIO DE LA NUEVA CORRECCIÓN ==========
-            // Se sanea la respuesta de la IA antes de usarla.
             $metadataGeneradaIA = $this->sanitizarMetadataIA($metadataGeneradaIA);
-            // ========== FIN DE LA NUEVA CORRECCIÓN ==========
-
             $metadataTecnica = $this->audioUtil->ejecutarAnalisisPython($rutaTemporalOriginal);
             $log['paso3_analisis_completado'] = ['ia' => $metadataGeneradaIA, 'tecnica' => $metadataTecnica];
 
@@ -144,7 +139,6 @@ class ProcesadorService
             $exito = $this->swordService->actualizarSample($idSample, $metadataFinal);
 
             if (!$exito) {
-                // Esta es la línea 103 (aproximadamente) que da el error
                 throw new \Exception("La actualización final en Sword API falló.");
             }
 
@@ -155,15 +149,20 @@ class ProcesadorService
         } catch (Throwable $e) {
             $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal, $rutaTemporalLigero]);
 
+            // --- INICIO DE LA CORRECCIÓN ---
+            // Se fusiona el error con la metadata existente para no perder datos.
             $retryCount = ($metadataActual['ia_retry_count'] ?? 0) + 1;
-            $metadataError = [
+            $metadataError = array_merge($metadataActual, [
                 'ia_status' => 'fallido' . $statusSuffix,
                 'ia_retry_count' => $retryCount,
                 'ia_last_error' => substr($e->getMessage(), 0, 500)
-            ];
-            $this->swordService->actualizarMetadataSample($idSample, $metadataError);
+            ]);
 
-            throw $e;
+            // Se llama al método que actualiza solo la metadata, pero ahora con los datos fusionados.
+            $this->swordService->actualizarMetadataSample($idSample, $metadataError);
+            // --- FIN DE LA CORRECCIÓN ---
+
+            throw $e; // Se relanza la excepción para que el orquestador principal la registre.
         }
 
         return $log;
