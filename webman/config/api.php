@@ -9,6 +9,11 @@ return [
         'base_url' => $_ENV['SWORD_BASE_URL'] ?? null,
         'api_url'  => $_ENV['SWORD_API_URL'] ?? null,
         'api_key'  => $_ENV['SWORD_API_KEY'] ?? null,
+        // (NUEVO) Lista de campos que la API espera en el nivel raíz del JSON
+        'root_fields' => [
+            'titulo', 'subtitulo', 'slug', 'estado', 'tipocontenido',
+            'descripcion', 'descripcion_corta', 'post_tags'
+        ],
     ],
     'gemini' => [
         'api_key' => $_ENV['API_GEMINI'] ?? null,

@@ -2,7 +2,6 @@
 /copiar.py
 /status
 /vendor
-*.pem
 
 copiar.py
 webman/copiar.py

@@ -24,6 +24,49 @@ class ProcesadorService
     }
 
     /**
+     * (NUEVO) Valida y sanea la metadata devuelta por la IA para asegurar que los tipos de datos son correctos.
+     * @param array $metadata La data cruda de Gemini.
+     * @return array La data saneada.
+     */
+    private function sanitizarMetadataIA(array $metadata): array
+    {
+        $sanitizada = $metadata;
+        $camposArray = ['tags', 'genero', 'emocion', 'instrumentos', 'artista_vibes'];
+
+        foreach ($camposArray as $campo) {
+            if (!isset($sanitizada[$campo])) {
+                $sanitizada[$campo] = []; // Si no existe, crea un array vacío.
+                continue;
+            }
+            if (is_string($sanitizada[$campo])) {
+                // Si es un string, lo convierte en un array limpio (sin espacios vacíos).
+                $sanitizada[$campo] = array_filter(array_map('trim', explode(',', $sanitizada[$campo])));
+            } elseif (!is_array($sanitizada[$campo])) {
+                // Si es cualquier otra cosa que no sea un array, lo resetea a un array vacío.
+                $sanitizada[$campo] = [];
+            }
+        }
+
+        // Asegura que los campos de texto principales sean strings.
+        $camposString = ['nombre_archivo_base', 'descripcion_corta', 'descripcion', 'tipo'];
+        foreach ($camposString as $campo) {
+            $sanitizada[$campo] = isset($sanitizada[$campo]) ? (string)$sanitizada[$campo] : '';
+        }
+
+        // Valida el campo 'tipo' para que sea uno de los valores permitidos.
+        $tipoNormalizado = strtolower(trim($sanitizada['tipo']));
+        if (!in_array($tipoNormalizado, ['one shot', 'loop'])) {
+            $sanitizada['tipo'] = str_contains($tipoNormalizado, 'loop') ? 'loop' : 'one shot'; // Default inteligente
+        } else {
+            $sanitizada['tipo'] = $tipoNormalizado;
+        }
+
+        casielLog("Metadata de IA saneada.", ['original' => $metadata, 'saneada' => $sanitizada]);
+        return $sanitizada;
+    }
+
+
+    /**
      * Procesa un único sample de principio a fin.
      * @param array $sample Los datos del sample a procesar.
      * @param bool $esForzado Indica si la ejecución es forzada (ignora reintentos).
@@ -63,10 +106,15 @@ class ProcesadorService
                 throw new \Exception("El análisis de Gemini falló o no devolvió un 'nombre_archivo_base'.");
             }
 
+            // ========== INICIO DE LA NUEVA CORRECCIÓN ==========
+            // Se sanea la respuesta de la IA antes de usarla.
+            $metadataGeneradaIA = $this->sanitizarMetadataIA($metadataGeneradaIA);
+            // ========== FIN DE LA NUEVA CORRECCIÓN ==========
+
             $metadataTecnica = $this->audioUtil->ejecutarAnalisisPython($rutaTemporalOriginal);
             $log['paso3_analisis_completado'] = ['ia' => $metadataGeneradaIA, 'tecnica' => $metadataTecnica];
 
-            // FASE 3: Nomenclatura y almacenamiento final (usando rename para eficiencia)
+            // FASE 3: Nomenclatura y almacenamiento final
             $nombreBaseIA = preg_replace('/[^a-z0-9_]+/', '', strtolower($metadataGeneradaIA['nombre_archivo_base']));
             $nombreArchivoBaseFinal = "kamples_{$idSample}_{$nombreBaseIA}";
             $extensionOriginal = pathinfo($urlAudioOriginal, PATHINFO_EXTENSION);
@@ -81,6 +129,7 @@ class ProcesadorService
 
             // FASE 4: Actualización final en Sword
             $metadataFinal = array_merge(
+                $metadataActual,
                 $metadataTecnica,
                 $metadataGeneradaIA,
                 [
@@ -92,27 +141,18 @@ class ProcesadorService
                 ]
             );
 
-            // No necesitamos enviar la metadata antigua de vuelta, solo los campos a actualizar/añadir.
-            $payloadFinal = [
-                // Campos raíz que podrían actualizarse (ej. si la IA los mejora)
-                'descripcion' => $metadataFinal['descripcion'],
-                'descripcion_corta' => $metadataFinal['descripcion_corta'],
-                'metadata' => $metadataFinal // El resto va a metadata
-            ];
-
-            $exito = $this->swordService->actualizarSample($idSample, $payloadFinal);
+            $exito = $this->swordService->actualizarSample($idSample, $metadataFinal);
 
             if (!$exito) {
+                // Esta es la línea 103 (aproximadamente) que da el error
                 throw new \Exception("La actualización final en Sword API falló.");
             }
 
-            $log['paso5_actualizacion_final'] = ['status' => 'ok', 'payload_enviado' => $payloadFinal];
+            $log['paso5_actualizacion_final'] = ['status' => 'ok', 'payload_enviado' => $metadataFinal];
             $log['fin'] = 'Proceso finalizado con éxito.';
 
-            // Limpieza final exitosa
             $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal, $rutaTemporalLigero]);
         } catch (Throwable $e) {
-            // En caso de error, limpiar archivos temporales si existen
             $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal, $rutaTemporalLigero]);
 
             $retryCount = ($metadataActual['ia_retry_count'] ?? 0) + 1;
@@ -123,7 +163,6 @@ class ProcesadorService
             ];
             $this->swordService->actualizarMetadataSample($idSample, $metadataError);
 
-            // Re-lanzar la excepción para que el llamador (controller/consumer) la maneje
             throw $e;
         }
 

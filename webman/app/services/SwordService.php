@@ -13,17 +13,8 @@ class SwordService
     protected string $apiKey;
     private const MAX_REINTENTOS_IA = 3;
 
-    // Lista de campos que se sabe que están en el nivel raíz del contenido en la API
-    private array $knownRootFields = [
-        'titulo',
-        'subtitulo',
-        'slug',
-        'estado',
-        'tipocontenido',
-        'descripcion',
-        'descripcion_corta',
-        'post_tags'
-    ];
+    // Se elimina la lista hardcodeada de aquí
+    private array $knownRootFields = [];
 
     public function __construct(string $apiUrl, string $apiKey)
     {
@@ -37,6 +28,8 @@ class SwordService
             'verify' => base_path() . '/config/certs/cacert.pem',
         ]);
         $this->apiKey = $apiKey;
+        // (MODIFICADO) Cargar los campos raíz desde la configuración
+        $this->knownRootFields = config('api.sword.root_fields', []);
     }
 
     public function obtenerSamplePendiente(): ?array
