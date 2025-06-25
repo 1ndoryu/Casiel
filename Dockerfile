@@ -15,11 +15,6 @@ RUN apt-get update && apt-get install -y \
 # 2. Instalar extensiones de PHP que vienen con el núcleo
 RUN docker-php-ext-install pcntl sockets pdo pdo_mysql pdo_pgsql zip
 
-# --- INICIO DE LA CORRECCIÓN FINAL ---
-# 3. Instalar la extensión de Redis desde PECL y activarla
-RUN pecl install redis && docker-php-ext-enable redis
-# --- FIN DE LA CORRECCIÓN FINAL ---
-
 # Instalar Composer para gestionar dependencias
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
