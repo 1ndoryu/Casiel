@@ -34,7 +34,6 @@ class GeminiService
         casielLog("Iniciando análisis de Gemini para: " . basename($rutaAudioLocal));
 
         try {
-            // 1. Leer el contenido del audio local
             $contenidoAudio = file_get_contents($rutaAudioLocal);
             if ($contenidoAudio === false) {
                 casielLog("No se pudo leer el archivo de audio local: $rutaAudioLocal", [], 'error');
@@ -42,12 +41,9 @@ class GeminiService
             }
             $audioBase64 = base64_encode($contenidoAudio);
             $mimeType = mime_content_type($rutaAudioLocal) ?: 'audio/mp3';
-            casielLog("Audio local leído y codificado en base64.");
 
-            // 2. Definir el prompt para la IA, ahora enriquecido con el contexto
             $prompt = $this->crearPrompt($contexto);
 
-            // 3. Construir la petición
             $cuerpoPeticion = [
                 'contents' => [
                     [
@@ -67,7 +63,6 @@ class GeminiService
                 ],
             ];
 
-            // 4. Enviar la petición a Gemini
             $respuesta = $this->cliente->post($this->apiUrl, [
                 'headers' => ['Content-Type' => 'application/json'],
                 'json' => $cuerpoPeticion,
@@ -75,7 +70,6 @@ class GeminiService
 
             $cuerpoRespuesta = json_decode($respuesta->getBody()->getContents(), true);
 
-            // 5. Extraer y devolver el JSON de la respuesta
             if (isset($cuerpoRespuesta['candidates'][0]['content']['parts'][0]['text'])) {
                 $textoJson = $cuerpoRespuesta['candidates'][0]['content']['parts'][0]['text'];
                 casielLog("Respuesta JSON recibida de la IA.");
@@ -106,14 +100,15 @@ class GeminiService
             $dataTecnica = json_encode($contexto['metadata_tecnica']);
             $infoContextual[] = "Ya he analizado técnicamente el audio y obtuve estos datos: {$dataTecnica}. NO los generes tú, enfócate en los campos creativos.";
         }
-        
+
         $promptContextual = implode(" ", $infoContextual);
 
         return <<<PROMPT
 Analiza este audio. {$promptContextual}
-Tu tarea es generar únicamente un objeto JSON con la siguiente estructura. Sé creativo pero preciso con los campos que te corresponden.
+Tu tarea es generar únicamente un objeto JSON con la siguiente estructura. Sé creativo pero preciso.
 No incluyas campos que ya te he proporcionado en los datos técnicos.
 
+- nombre_archivo_base: Un nombre de archivo corto, descriptivo, en inglés, todo en minúsculas y usando guiones bajos como separadores (ej: "deep_kick_808", "sad_guitar_melody", "energetic_synth_loop").
 - tags: Array de strings con etiquetas descriptivas (ej: "melodic", "dark", "808", "lo-fi").
 - tipo: String, "one shot" o "loop".
 - genero: Array de strings con géneros musicales (ej: "hip hop", "trap", "electronic").

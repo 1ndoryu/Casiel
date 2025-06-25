@@ -12,6 +12,10 @@ class AudioUtil
     private string $scriptPath;
     private string $ffmpegPath;
     private string $tempDir;
+    private int $pythonTimeout;
+    private string $storageOriginals;
+    private string $storagePublicos;
+    private string $publicUrlBase;
 
     public function __construct()
     {
@@ -20,41 +24,63 @@ class AudioUtil
         $this->scriptPath = $config['script_path'];
         $this->ffmpegPath = $config['ffmpeg_path'];
         $this->tempDir = $config['temp_dir'];
+        $this->pythonTimeout = $config['python_timeout'];
+        $this->storageOriginals = $config['storage_originals'];
+        $this->storagePublicos = $config['storage_publicos'];
+        $this->publicUrlBase = $config['public_url_base'];
 
-        if (!is_dir($this->tempDir)) {
-            mkdir($this->tempDir, 0777, true);
-        }
+        // Asegurarse de que los directorios existen
+        if (!is_dir($this->tempDir)) mkdir($this->tempDir, 0777, true);
+        if (!is_dir($this->storageOriginals)) mkdir($this->storageOriginals, 0777, true);
+        if (!is_dir($this->storagePublicos)) mkdir($this->storagePublicos, 0777, true);
     }
 
-    public function procesarDesdeUrl(string $urlAudio, string $nombreOriginal): ?array
+    public function procesarDesdeUrl(string $urlAudio, string $nombreArchivoBase, string $extensionOriginal): ?array
     {
         casielLog("Iniciando procesamiento de audio para: $urlAudio");
         $rutaTemporalOriginal = null;
+        $rutaMp3Ligero = null;
 
         try {
-            // 1. Descargar el archivo
+            // 1. Descargar el archivo original a una ubicación temporal
             $rutaTemporalOriginal = $this->descargarArchivo($urlAudio);
 
             // 2. Analizar con Python para obtener datos técnicos (BPM, Tonalidad)
             $metadataTecnica = $this->ejecutarAnalisisPython($rutaTemporalOriginal);
 
-            // 3. Generar nuevo nombre y ruta de destino para el MP3
-            $nuevoNombreBase = $this->generarNuevoNombre($nombreOriginal, $metadataTecnica);
-            $rutaMp3Ligero = $this->tempDir . '/' . $nuevoNombreBase . '.mp3';
+            // 3. Definir rutas de destino para los archivos finales
+            $nombreLigero = $nombreArchivoBase . '_ligero.mp3';
+            $nombreOriginalFinal = $nombreArchivoBase . '_original.' . $extensionOriginal;
 
-            // 4. Convertir a MP3 ligero con FFMPEG
-            $this->convertirAudio($rutaTemporalOriginal, $rutaMp3Ligero);
+            $rutaFinalLigero = $this->storagePublicos . '/' . $nombreLigero;
+            $rutaFinalOriginal = $this->storageOriginals . '/' . $nombreOriginalFinal;
 
-            casielLog("Procesamiento de audio completado para " . basename($rutaMp3Ligero));
+            // 4. Convertir a MP3 ligero con FFMPEG y guardarlo en su destino final
+            $this->convertirAudio($rutaTemporalOriginal, $rutaFinalLigero);
+
+            // 5. Mover el archivo original descargado a su destino final
+            rename($rutaTemporalOriginal, $rutaFinalOriginal);
+            $rutaTemporalOriginal = null; // Para evitar que el finally lo borre
+
+            casielLog("Procesamiento y almacenamiento de audio completado.");
 
             return [
-                'ruta_mp3' => $rutaMp3Ligero,
-                'nombre_mp3' => $nuevoNombreBase . '.mp3',
-                'nombre_original' => $nombreOriginal,
-                'metadata_tecnica' => $metadataTecnica,
+                'ruta_ligero'       => $rutaFinalLigero,
+                'ruta_original'     => $rutaFinalOriginal,
+                'nombre_ligero'     => $nombreLigero,
+                'nombre_original'   => $nombreOriginalFinal,
+                'metadata_tecnica'  => $metadataTecnica,
+                'url_stream'        => rtrim($this->publicUrlBase, '/') . '/' . $nombreLigero,
             ];
+        } catch (\Throwable $e) {
+            casielLog("Error fatal en procesarDesdeUrl: " . $e->getMessage(), [], 'error');
+            // Limpiar el archivo ligero si se creó antes del fallo
+            if ($rutaMp3Ligero && file_exists($rutaMp3Ligero)) {
+                unlink($rutaMp3Ligero);
+            }
+            return null; // Devolver null para indicar el fallo
         } finally {
-            // 5. Limpiar siempre el archivo original descargado
+            // Limpiar siempre el archivo original temporal si aún existe
             if ($rutaTemporalOriginal && file_exists($rutaTemporalOriginal)) {
                 unlink($rutaTemporalOriginal);
             }
@@ -78,6 +104,8 @@ class AudioUtil
     private function ejecutarAnalisisPython(string $rutaAudio): array
     {
         $proceso = new Process([$this->pythonPath, $this->scriptPath, $rutaAudio]);
+        $proceso->setTimeout($this->pythonTimeout);
+
         try {
             $proceso->mustRun();
             $salidaJson = $proceso->getOutput();
@@ -85,8 +113,6 @@ class AudioUtil
             return json_decode($salidaJson, true) ?? [];
         } catch (ProcessFailedException $e) {
             $error = "El script de Python falló: " . $e->getMessage() . " | STDERR: " . $proceso->getErrorOutput();
-            casielLog($error, [], 'error');
-            // Lanzamos una excepción detallada en lugar de devolver null
             throw new RuntimeException($error);
         }
     }
@@ -100,18 +126,7 @@ class AudioUtil
             casielLog("Conversión a MP3 ligero exitosa: " . basename($destino));
         } catch (ProcessFailedException $e) {
             $error = "La conversión con FFMPEG falló: " . $e->getMessage() . " | STDERR: " . $proceso->getErrorOutput();
-            casielLog($error, [], 'error');
-            // Lanzamos una excepción detallada en lugar de devolver false
             throw new RuntimeException($error);
         }
-    }
-
-    private function generarNuevoNombre(string $nombreOriginal, array $metadataTecnica): string
-    {
-        // Usa la tonalidad si está disponible, si no 'sample'
-        $keyword = $metadataTecnica['tonalidad'] ?? 'sample';
-        $randomDigits = substr(str_shuffle("0123456789"), 0, 5);
-        $keywordLimpio = preg_replace('/[^a-z0-9]+/', '_', strtolower($keyword));
-        return "kamples_{$keywordLimpio}_{$randomDigits}";
     }
 }

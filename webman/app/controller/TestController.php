@@ -5,14 +5,14 @@ namespace app\controller;
 use support\Request;
 use app\services\SwordService;
 use app\services\GeminiService;
-use app\utils\AudioUtil; // Importar AudioUtil
+use app\utils\AudioUtil;
 use Throwable;
 
 class TestController
 {
     private SwordService $swordService;
     private GeminiService $geminiService;
-    private AudioUtil $audioUtil; // Añadir AudioUtil
+    private AudioUtil $audioUtil;
     private string $swordBaseUrl;
     private array $log = [];
 
@@ -25,17 +25,21 @@ class TestController
     {
         $this->log['inicio'] = 'Iniciando proceso de prueba manual.';
 
-        $this->swordService = new SwordService(config('api.sword.api_url'), config('api.sword.api_key'));
-        $this->geminiService = new GeminiService(config('api.gemini.api_key'), config('api.gemini.model_id'));
-        $this->audioUtil = new AudioUtil(); // Instanciar AudioUtil
-        $this->swordBaseUrl = config('api.sword.base_url');
+        try {
+            $this->swordService = new SwordService(config('api.sword.api_url'), config('api.sword.api_key'));
+            $this->geminiService = new GeminiService(config('api.gemini.api_key'), config('api.gemini.model_id'));
+            $this->audioUtil = new AudioUtil();
+            $this->swordBaseUrl = config('api.sword.base_url');
 
-        if (!$this->swordBaseUrl || !config('api.sword.api_key') || !config('api.gemini.api_key')) {
-            $this->log['error_config'] = 'Configuración de API (.env) incompleta o no cargada.';
+            if (!$this->swordBaseUrl || !config('api.sword.api_key') || !config('api.gemini.api_key')) {
+                throw new \Exception('Configuración de API (.env) incompleta o no cargada.');
+            }
+            $this->log['configuracion'] = 'Servicios y variables de entorno cargados.';
+            return true;
+        } catch (\Throwable $e) {
+            $this->log['error_config'] = $e->getMessage();
             return false;
         }
-        $this->log['configuracion'] = 'Servicios y variables de entorno cargados.';
-        return true;
     }
 
     private function procesarSampleUnico(array $sample, bool $esForzado = false)
@@ -53,59 +57,71 @@ class TestController
             return json(['log_ejecucion' => $this->log], 422);
         }
 
-        // Marcar como procesando en Sword
         $this->swordService->actualizarMetadataSample($idSample, array_merge($metadataActual, ['ia_status' => 'procesando' . $statusSuffix]));
         $this->log['paso1_marcar_procesando'] = "Sample ID: $idSample marcado como 'procesando{$statusSuffix}'.";
 
+        $rutaTemporalLigero = null; // Para limpieza en caso de fallo
+
         try {
-            // FASE DE PROCESAMIENTO DE AUDIO
+            // FASE 1: OBTENER AUDIO Y ENVIAR A IA PARA ANÁLISIS Y NOMBRE
             $urlCompletaAudio = rtrim($this->swordBaseUrl, '/') . $urlAudioOriginal;
-            $resultadoAudio = $this->audioUtil->procesarDesdeUrl($urlCompletaAudio, $nombreOriginal);
+            $rutaTemporalLigero = $this->audioUtil->procesarDesdeUrl($urlCompletaAudio, "temp_for_gemini", pathinfo($nombreOriginal, PATHINFO_EXTENSION))['ruta_ligero'];
+
+            if (!$rutaTemporalLigero || !file_exists($rutaTemporalLigero)) {
+                throw new \Exception("Fallo al crear la versión ligera temporal para el análisis de IA.");
+            }
+
+            $contextoIA = ['titulo' => $sample['titulo']];
+            $metadataGeneradaIA = $this->geminiService->analizarAudio($rutaTemporalLigero, $contextoIA);
+
+            if (!$metadataGeneradaIA || empty($metadataGeneradaIA['nombre_archivo_base'])) {
+                throw new \Exception("El análisis de Gemini falló o no devolvió un 'nombre_archivo_base'.");
+            }
+            $this->log['paso2_analisis_gemini'] = $metadataGeneradaIA;
+            unlink($rutaTemporalLigero); // Limpiar el audio temporal de IA
+            $rutaTemporalLigero = null;
+
+            // FASE 2: PROCESAMIENTO FINAL CON EL NOMBRE CORRECTO
+            $nombreArchivoBase = $metadataGeneradaIA['nombre_archivo_base'];
+            $extensionOriginal = pathinfo($nombreOriginal, PATHINFO_EXTENSION);
+
+            $resultadoAudio = $this->audioUtil->procesarDesdeUrl($urlCompletaAudio, $nombreArchivoBase, $extensionOriginal);
 
             if (!$resultadoAudio) {
-                throw new \Exception("Fallo en AudioUtil::procesarDesdeUrl.");
+                throw new \Exception("Fallo en el pipeline final de AudioUtil::procesarDesdeUrl.");
             }
-            $this->log['paso2_procesamiento_audio'] = $resultadoAudio;
+            $this->log['paso3_procesamiento_final_audio'] = $resultadoAudio;
 
-            // FASE DE SUBIDA DEL NUEVO AUDIO
-            $archivoSubido = $this->swordService->subirArchivo($resultadoAudio['ruta_mp3'], $resultadoAudio['nombre_mp3']);
-            if (!$archivoSubido) {
-                throw new \Exception("Fallo al subir el nuevo MP3 a Sword.");
-            }
-            $this->log['paso3_subida_sword'] = $archivoSubido;
-            unlink($resultadoAudio['ruta_mp3']); // Limpiar el archivo temporal
-
-            // FASE DE ANÁLISIS CON IA
-            $contextoIA = [
-                'titulo' => $sample['titulo'],
-                'metadata_tecnica' => $resultadoAudio['metadata_tecnica']
-            ];
-            $metadataGeneradaIA = $this->geminiService->analizarAudio($resultadoAudio['ruta_mp3'], $contextoIA);
-
-            if (!$metadataGeneradaIA) {
-                throw new \Exception("El análisis de Gemini falló o no devolvió datos.");
-            }
-            $this->log['paso4_analisis_gemini'] = $metadataGeneradaIA;
-
-            // FASE DE ACTUALIZACIÓN FINAL
+            // FASE 3: ACTUALIZACIÓN FINAL EN SWORD (SIN SUBIR ARCHIVOS)
             $metadataFinal = array_merge(
                 $metadataActual,
                 $resultadoAudio['metadata_tecnica'],
                 $metadataGeneradaIA,
                 [
                     'ia_status' => 'completado' . $statusSuffix,
-                    'url_archivo_ligero' => $archivoSubido['url'],
-                    'nombre_archivo_original' => $resultadoAudio['nombre_original']
+                    'url_stream' => $resultadoAudio['url_stream'],
+                    'nombre_archivo_ligero' => $resultadoAudio['nombre_ligero'],
+                    'nombre_archivo_original' => $resultadoAudio['nombre_original'],
+                    'ia_retry_count' => 0
                 ]
             );
 
             $exito = $this->swordService->actualizarMetadataSample($idSample, $metadataFinal);
-            $this->log['paso5_actualizacion_final'] = ['status' => $exito ? 'ok' : 'fallido', 'metadata_enviada' => $metadataFinal];
+            $this->log['paso4_actualizacion_final'] = ['status' => $exito ? 'ok' : 'fallido', 'metadata_enviada' => $metadataFinal];
             $this->log['fin'] = 'Proceso de prueba finalizado con éxito.';
 
             return json(['log_ejecucion' => $this->log]);
         } catch (\Throwable $e) {
-            $metadataError = array_merge($metadataActual, ['ia_status' => 'fallido' . $statusSuffix]);
+            if ($rutaTemporalLigero && file_exists($rutaTemporalLigero)) {
+                unlink($rutaTemporalLigero);
+            }
+
+            $retryCount = ($metadataActual['ia_retry_count'] ?? 0) + 1;
+            $metadataError = array_merge($metadataActual, [
+                'ia_status' => 'fallido' . $statusSuffix,
+                'ia_retry_count' => $retryCount,
+                'ia_last_error' => substr($e->getMessage(), 0, 500)
+            ]);
             $this->swordService->actualizarMetadataSample($idSample, $metadataError);
             $this->log['error_fatal'] = ['mensaje' => $e->getMessage(), 'archivo' => $e->getFile(), 'linea' => $e->getLine()];
             return json(['log_ejecucion' => $this->log], 500);
