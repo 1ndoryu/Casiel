@@ -43,7 +43,7 @@ IGNORAR_ARCHIVOS = [
     "themes"
 ]
 # 4. Lista de extensiones de archivo que quieres ignorar.
-IGNORAR_EXTENSIONES = [".log", ".lock", ".bak", ".tmp", ".dll", ".exe", ".jpg", ".png", ".gif", ".ico", ".css", "webp", "pem"]
+IGNORAR_EXTENSIONES = [".log", ".lock", ".bak", ".tmp", ".dll", ".exe", ".jpg", ".png", ".gif", ".ico", ".css", "webp", "pem", "mp3", "wav"]
 
 # --- FIN DE LA CONFIGURACIÓN ---
 

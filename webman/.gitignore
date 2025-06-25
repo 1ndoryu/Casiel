@@ -6,3 +6,7 @@
 .env
 /tests/tmp
 /tests/.phpunit.result.cache
+*.mp3
+copiar.py
+webman/copiar.py
+/copiar.py

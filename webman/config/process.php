@@ -63,14 +63,27 @@ return [
             ]
         ]
     ],
-    // ======================= PROCESO DE CASIEL (DESACTIVADO TEMPORALMENTE) =======================
+    // --- MODO 1: CONSUMIDOR DE RABBITMQ (Recomendado) ---
     /*
-  'procesador-samples' => [
-    'handler' => app\process\ProcesadorSamples::class,
-    'count' => 1, // Solo necesitamos una instancia de este proceso
-    'user'  => '',
-    'group' => '',
-    'constructor' => []
-  ]
-  */
+    'rabbitmq-consumer' => [
+        'handler' => app\process\RabbitMQConsumer::class,
+        'count' => 1, // Generalmente, un solo consumidor es suficiente.
+        'user'  => '',
+        'group' => '',
+        'constructor' => []
+    ],
+    */
+
+
+    // --- MODO 2: PROCESADOR POR SONDEO (Legacy) ---
+    // Este worker está desactivado por defecto para favorecer el uso de RabbitMQ.
+    /*
+    'procesador-samples-legacy' => [
+        'handler' => app\process\ProcesadorSamples::class, // Este es el worker antiguo
+        'count' => 1,
+        'user'  => '',
+        'group' => '',
+        'constructor' => []
+    ]
+    */
 ];
