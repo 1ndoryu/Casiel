@@ -1,5 +1,3 @@
-# --- ARCHIVO: webman/app/utils/audio.py ---
-
 import sys
 import json
 import numpy as np
@@ -52,14 +50,29 @@ def analizar_audio(audio_path):
         # Cargar el audio con librosa
         audio, sr = librosa.load(audio_path, sr=None, mono=True)
 
-        # 1. Extraer BPM
-        bpm = librosa.beat.beat_track(y=audio, sr=sr)[0]
+        # --- 1. Extraer BPM (Lógica explícita y segura para el linter) ---
+        tempo = librosa.beat.beat_track(y=audio, sr=sr)[0]
+        bpm_final = None
+        
+        # Paso A: Obtener un valor numérico.
+        numeric_tempo = None
+        if isinstance(tempo, np.ndarray):
+            if tempo.size > 0:
+                # np.mean devuelve un np.float, lo convertimos a float de python.
+                numeric_tempo = float(np.mean(tempo))
+        elif tempo is not None:
+             # Si no es array, es un número. Aún así lo convertimos a float para ser consistentes.
+            numeric_tempo = float(tempo)
+        
+        # Paso B: Validar que el float sea utilizable (no sea None, ni NaN)
+        if numeric_tempo is not None and not np.isnan(numeric_tempo):
+            bpm_final = int(round(numeric_tempo))
 
-        # 2. Estimar Tonalidad
+        # --- 2. Estimar Tonalidad ---
         tonalidad, escala = estimar_tonalidad(audio, sr)
 
         resultados = {
-            "bpm": round(bpm) if bpm else None,
+            "bpm": bpm_final,
             "tonalidad": tonalidad,
             "escala": escala
         }
@@ -67,7 +80,7 @@ def analizar_audio(audio_path):
         print(json.dumps(resultados))
 
     except Exception as e:
-        print(json.dumps({"error": f"Error en librosa: {str(e)}"}), file=sys.stderr)
+        print(json.dumps({"error": f"Error en librosa al procesar el archivo: {str(e)}"}), file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":
