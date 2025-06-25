@@ -63,27 +63,25 @@ return [
             ]
         ]
     ],
-    // --- MODO 1: CONSUMIDOR DE RABBITMQ (Recomendado) ---
-    /*
-    'rabbitmq-consumer' => [
-        'handler' => app\process\RabbitMQConsumer::class,
-        'count' => 1, // Generalmente, un solo consumidor es suficiente.
-        'user'  => '',
-        'group' => '',
-        'constructor' => []
-    ],
-    */
+  // --- MODO 1: CONSUMIDOR DE RABBITMQ (Recomendado y Activado) ---
+  'rabbitmq-consumer' => [
+    'handler' => app\process\RabbitMQConsumer::class,
+    'count' => 1, // Generalmente, un solo consumidor es suficiente.
+    'user' => '',
+    'group' => '',
+    'constructor' => []
+  ],
 
 
-    // --- MODO 2: PROCESADOR POR SONDEO (Legacy) ---
-    // Este worker está desactivado por defecto para favorecer el uso de RabbitMQ.
-    /*
-    'procesador-samples-legacy' => [
-        'handler' => app\process\ProcesadorSamples::class, // Este es el worker antiguo
-        'count' => 1,
-        'user'  => '',
-        'group' => '',
-        'constructor' => []
-    ]
-    */
+  // --- MODO 2: PROCESADOR POR SONDEO (Legacy - Desactivado) ---
+  // Este worker está desactivado para favorecer el uso de RabbitMQ.
+  /*
+  'procesador-samples-legacy' => [
+    'handler' => app\process\ProcesadorSamples::c  Glass,
+    'count' => 1,
+    'user' => '',
+    'group' => '',
+    'constructor' => []
+  ]
+  */
 ];
