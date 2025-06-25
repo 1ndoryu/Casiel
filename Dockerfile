@@ -5,8 +5,16 @@ RUN apt-get update && apt-get install -y \
     unzip \
     libzip-dev \
     libpq-dev \
-    ffmpeg \ 
+    ffmpeg \
+    python3 \
+    python3-pip \
+    build-essential \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 RUN docker-php-ext-install pcntl sockets pdo pdo_mysql pdo_pgsql zip
 
