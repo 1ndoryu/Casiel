@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY requirements.txt .
 
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt 
 
 RUN docker-php-ext-install pcntl sockets pdo pdo_mysql pdo_pgsql zip
 
