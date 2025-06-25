@@ -26,5 +26,9 @@ return [
         'queue' => 'casiel_processing_queue',
         'dlx_exchange' => 'casiel_dlx', 
         'dlq_queue' => 'casiel_dead_letter_queue',
+    ],
+
+    'security' => [
+        'internal_api_key' => $_ENV['CASIEL_INTERNAL_API_KEY'] ?? null,
     ]
 ];
