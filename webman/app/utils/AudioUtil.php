@@ -58,7 +58,7 @@ class AudioUtil
 
     public function ejecutarAnalisisPython(string $rutaAudio): array
     {
-        $proceso = new Process([$this->pythonPath, $this->scriptPath, $rutaAudio]);
+        $proceso = new Process([$this->pythonPath, $this->scriptPath, 'analyze', $rutaAudio]);
         $proceso->setTimeout($this->pythonTimeout);
 
         try {
@@ -67,15 +67,39 @@ class AudioUtil
             casielLog("Análisis de Python exitoso.", ['output' => $salidaJson]);
             return json_decode($salidaJson, true) ?? [];
         } catch (ProcessFailedException $e) {
-            $error = "El script de Python falló: " . $e->getMessage() . " | STDERR: " . $proceso->getErrorOutput();
+            $error = "El script de Python (analyze) falló: " . $e->getMessage() . " | STDERR: " . $proceso->getErrorOutput();
+            throw new RuntimeException($error);
+        }
+    }
+
+    public function generarHashPerceptual(string $rutaAudio): ?string
+    {
+        $proceso = new Process([$this->pythonPath, $this->scriptPath, 'hash', $rutaAudio]);
+        $proceso->setTimeout($this->pythonTimeout);
+
+        try {
+            $proceso->mustRun();
+            $salidaJson = $proceso->getOutput();
+            $resultado = json_decode($salidaJson, true);
+            if (isset($resultado['audio_hash'])) {
+                casielLog("Hash perceptual generado exitosamente.", ['hash' => $resultado['audio_hash']]);
+                return $resultado['audio_hash'];
+            }
+            casielLog("El script de hash no devolvió un hash.", ['output' => $salidaJson], 'warning');
+            return null;
+        } catch (ProcessFailedException $e) {
+            $error = "El script de Python (hash) falló: " . $e->getMessage() . " | STDERR: " . $proceso->getErrorOutput();
             throw new RuntimeException($error);
         }
     }
     
     public function guardarArchivosPermanentes(string $rutaTemporalOriginal, string $rutaTemporalLigero, string $nombreArchivoBaseFinal, string $extensionOriginal): array
     {
-        $nombreLigeroFinal = $nombreArchivoBaseFinal . '_ligero.mp3';
-        $nombreOriginalFinal = $nombreArchivoBaseFinal . '_original.' . $extensionOriginal;
+        // Limpiamos el nombre base para que sea seguro para un nombre de archivo
+        $nombreBaseSeguro = preg_replace('/[\\\\\/:"*?<>|]/', '', $nombreArchivoBaseFinal);
+        
+        $nombreLigeroFinal = $nombreBaseSeguro . '_ligero.mp3';
+        $nombreOriginalFinal = $nombreBaseSeguro . '_original.' . $extensionOriginal;
 
         $rutaFinalLigero = $this->storagePublicos . '/' . $nombreLigeroFinal;
         $rutaFinalOriginal = $this->storageOriginals . '/' . $nombreOriginalFinal;
@@ -91,7 +115,7 @@ class AudioUtil
             'ruta_original'   => $rutaFinalOriginal,
             'nombre_ligero'   => $nombreLigeroFinal,
             'nombre_original' => $nombreOriginalFinal,
-            'url_stream'      => rtrim($this->publicUrlBase, '/') . '/' . $nombreLigeroFinal,
+            'url_stream'      => rtrim($this->publicUrlBase, '/') . '/' . rawurlencode($nombreLigeroFinal),
         ];
     }
     

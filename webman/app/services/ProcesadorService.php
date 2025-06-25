@@ -22,12 +22,7 @@ class ProcesadorService
         $this->audioUtil = $audioUtil;
         $this->swordBaseUrl = $swordBaseUrl;
     }
-
-    /**
-     * Valida y sanea la metadata devuelta por la IA para asegurar que los tipos de datos son correctos.
-     * @param array $metadata La data cruda de Gemini.
-     * @return array La data saneada.
-     */
+    
     private function sanitizarMetadataIA(array $metadata): array
     {
         $sanitizada = $metadata;
@@ -35,25 +30,21 @@ class ProcesadorService
 
         foreach ($camposArray as $campo) {
             if (!isset($sanitizada[$campo])) {
-                $sanitizada[$campo] = []; // Si no existe, crea un array vacío.
+                $sanitizada[$campo] = []; 
                 continue;
             }
             if (is_string($sanitizada[$campo])) {
-                // Si es un string, lo convierte en un array limpio (sin espacios vacíos).
                 $sanitizada[$campo] = array_filter(array_map('trim', explode(',', $sanitizada[$campo])));
             } elseif (!is_array($sanitizada[$campo])) {
-                // Si es cualquier otra cosa que no sea un array, lo resetea a un array vacío.
                 $sanitizada[$campo] = [];
             }
         }
-
-        // Asegura que los campos de texto principales sean strings.
+        
         $camposString = ['nombre_archivo_base', 'descripcion_corta', 'descripcion', 'tipo'];
         foreach ($camposString as $campo) {
             $sanitizada[$campo] = isset($sanitizada[$campo]) ? (string)$sanitizada[$campo] : '';
         }
-
-        // Valida el campo 'tipo' para que sea uno de los valores permitidos.
+        
         $tipoNormalizado = strtolower(trim($sanitizada['tipo']));
         if (!in_array($tipoNormalizado, ['one shot', 'loop'])) {
             $sanitizada['tipo'] = str_contains($tipoNormalizado, 'loop') ? 'loop' : 'one shot'; // Default inteligente
@@ -65,6 +56,16 @@ class ProcesadorService
         return $sanitizada;
     }
 
+    private function generarCodigo(int $longitud = 5): string
+    {
+        $caracteres = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        $longitudCaracteres = strlen($caracteres);
+        $codigo = '';
+        for ($i = 0; $i < $longitud; $i++) {
+            $codigo .= $caracteres[rand(0, $longitudCaracteres - 1)];
+        }
+        return $codigo;
+    }
 
     /**
      * Procesa un único sample de principio a fin.
@@ -93,13 +94,34 @@ class ProcesadorService
         $log['paso1_marcar_procesando'] = "Sample ID: $idSample marcado como 'procesando{$statusSuffix}'.";
 
         try {
-            // FASE 1: Descargar y crear versión ligera temporal
+            // FASE 1: Descargar y generar hash para detección de duplicados
             $urlCompletaAudio = rtrim($this->swordBaseUrl, '/') . $urlAudioOriginal;
             $rutaTemporalOriginal = $this->audioUtil->descargarAudio($urlCompletaAudio);
-            $rutaTemporalLigero = $this->audioUtil->crearVersionLigeraTemporal($rutaTemporalOriginal);
-            $log['paso2_descarga_y_conversion_temporal'] = 'Audio original descargado y versión ligera temporal creada.';
+            $hash = $this->audioUtil->generarHashPerceptual($rutaTemporalOriginal);
 
-            // FASE 2: Análisis con IA y Python
+            if ($hash) {
+                $log['paso2_hash_generado'] = $hash;
+                $duplicado = $this->swordService->buscarSamplePorHash($hash);
+                if ($duplicado) {
+                    $log['paso2.1_duplicado_detectado'] = "El sample es un duplicado del ID: " . $duplicado['id'];
+                    $metadataUpdate = [
+                        'ia_status' => 'duplicado',
+                        'es_duplicado' => true,
+                        'duplicado_de_id' => $duplicado['id'],
+                        'metadata_heredada' => $duplicado['metadata'] ?? []
+                    ];
+                    $this->swordService->actualizarMetadataSample($idSample, array_merge($metadataActual, $metadataUpdate));
+                    $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal]);
+                    return $log;
+                }
+            } else {
+                 $log['paso2_hash_generado'] = 'No se pudo generar el hash, se continua sin detección de duplicados.';
+            }
+
+            // FASE 2: Crear versión ligera y Análisis con IA y Python
+            $rutaTemporalLigero = $this->audioUtil->crearVersionLigeraTemporal($rutaTemporalOriginal);
+            $log['paso3_conversion_temporal'] = 'Versión ligera temporal creada.';
+            
             $contextoIA = ['titulo' => $sample['titulo']];
             $metadataGeneradaIA = $this->geminiService->analizarAudio($rutaTemporalLigero, $contextoIA);
             if (!$metadataGeneradaIA || empty($metadataGeneradaIA['nombre_archivo_base'])) {
@@ -107,12 +129,16 @@ class ProcesadorService
             }
             $metadataGeneradaIA = $this->sanitizarMetadataIA($metadataGeneradaIA);
             $metadataTecnica = $this->audioUtil->ejecutarAnalisisPython($rutaTemporalOriginal);
-            $log['paso3_analisis_completado'] = ['ia' => $metadataGeneradaIA, 'tecnica' => $metadataTecnica];
+            $log['paso4_analisis_completado'] = ['ia' => $metadataGeneradaIA, 'tecnica' => $metadataTecnica];
 
             // FASE 3: Nomenclatura y almacenamiento final
-            $nombreBaseIA = preg_replace('/[^a-z0-9_]+/', '', strtolower($metadataGeneradaIA['nombre_archivo_base']));
-            $nombreArchivoBaseFinal = "kamples_{$idSample}_{$nombreBaseIA}";
+            $codeSample = $this->generarCodigo();
+            $nombreBaseIA = $metadataGeneradaIA['nombre_archivo_base'];
+            $brandName = config('casiel.naming.brand_name', 'kamples');
+            $nombreArchivoBaseFinal = ucfirst($nombreBaseIA) . " {$brandName}_" . $codeSample;
             $extensionOriginal = pathinfo($urlAudioOriginal, PATHINFO_EXTENSION);
+            
+            $log['paso5_nuevo_nombre_base'] = $nombreArchivoBaseFinal;
 
             $resultadoAlmacenamiento = $this->audioUtil->guardarArchivosPermanentes(
                 $rutaTemporalOriginal,
@@ -120,7 +146,7 @@ class ProcesadorService
                 $nombreArchivoBaseFinal,
                 $extensionOriginal
             );
-            $log['paso4_almacenamiento_final'] = $resultadoAlmacenamiento;
+            $log['paso6_almacenamiento_final'] = $resultadoAlmacenamiento;
 
             // FASE 4: Actualización final en Sword
             $metadataFinal = array_merge(
@@ -132,7 +158,9 @@ class ProcesadorService
                     'url_stream' => $resultadoAlmacenamiento['url_stream'],
                     'nombre_archivo_ligero' => $resultadoAlmacenamiento['nombre_ligero'],
                     'nombre_archivo_original' => $resultadoAlmacenamiento['nombre_original'],
-                    'ia_retry_count' => 0
+                    'ia_retry_count' => 0,
+                    'code_sample' => $codeSample,
+                    'audio_hash' => $hash,
                 ]
             );
 
@@ -142,15 +170,13 @@ class ProcesadorService
                 throw new \Exception("La actualización final en Sword API falló.");
             }
 
-            $log['paso5_actualizacion_final'] = ['status' => 'ok', 'payload_enviado' => $metadataFinal];
+            $log['paso7_actualizacion_final'] = ['status' => 'ok', 'payload_enviado' => $metadataFinal];
             $log['fin'] = 'Proceso finalizado con éxito.';
 
             $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal, $rutaTemporalLigero]);
         } catch (Throwable $e) {
             $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal, $rutaTemporalLigero]);
 
-            // --- INICIO DE LA CORRECCIÓN ---
-            // Se fusiona el error con la metadata existente para no perder datos.
             $retryCount = ($metadataActual['ia_retry_count'] ?? 0) + 1;
             $metadataError = array_merge($metadataActual, [
                 'ia_status' => 'fallido' . $statusSuffix,
@@ -158,10 +184,7 @@ class ProcesadorService
                 'ia_last_error' => substr($e->getMessage(), 0, 500)
             ]);
 
-            // Se llama al método que actualiza solo la metadata, pero ahora con los datos fusionados.
             $this->swordService->actualizarMetadataSample($idSample, $metadataError);
-            // --- FIN DE LA CORRECCIÓN ---
-
             throw $e; // Se relanza la excepción para que el orquestador principal la registre.
         }
 

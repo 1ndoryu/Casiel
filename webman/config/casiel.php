@@ -12,6 +12,11 @@ return [
         'public_url_base' => '/samples'
     ],
 
+    // (NUEVO) Parámetros para la convención de nombres
+    'naming' => [
+        'brand_name' => 'kamples',
+    ],
+
     'rabbitmq' => [
         'host' => $_ENV['RABBITMQ_HOST'] ?? 'localhost',
         'port' => $_ENV['RABBITMQ_PORT'] ?? 5672,
@@ -19,8 +24,7 @@ return [
         'password' => $_ENV['RABBITMQ_PASS'] ?? 'guest',
         'vhost' => $_ENV['RABBITMQ_VHOST'] ?? '/',
         'queue' => 'casiel_processing_queue',
-        // --- (NUEVO) Configuración para la Dead Letter Queue ---
-        'dlx_exchange' => 'casiel_dlx', // Dead Letter Exchange
-        'dlq_queue' => 'casiel_dead_letter_queue', // Dead Letter Queue
+        'dlx_exchange' => 'casiel_dlx', 
+        'dlq_queue' => 'casiel_dead_letter_queue',
     ]
 ];

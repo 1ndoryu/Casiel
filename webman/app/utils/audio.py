@@ -2,6 +2,7 @@ import sys
 import json
 import numpy as np
 import librosa
+import hashlib
 
 def estimar_tonalidad(audio, sr):
     """
@@ -47,24 +48,20 @@ def estimar_tonalidad(audio, sr):
 
 def analizar_audio(audio_path):
     try:
-        # Cargar el audio con librosa
+        # Cargar el audio completo para el análisis de BPM y tonalidad
         audio, sr = librosa.load(audio_path, sr=None, mono=True)
 
-        # --- 1. Extraer BPM (Lógica explícita y segura para el linter) ---
+        # --- 1. Extraer BPM ---
         tempo = librosa.beat.beat_track(y=audio, sr=sr)[0]
         bpm_final = None
         
-        # Paso A: Obtener un valor numérico.
         numeric_tempo = None
         if isinstance(tempo, np.ndarray):
             if tempo.size > 0:
-                # np.mean devuelve un np.float, lo convertimos a float de python.
                 numeric_tempo = float(np.mean(tempo))
         elif tempo is not None:
-             # Si no es array, es un número. Aún así lo convertimos a float para ser consistentes.
-            numeric_tempo = float(tempo)
+                numeric_tempo = float(tempo)
         
-        # Paso B: Validar que el float sea utilizable (no sea None, ni NaN)
         if numeric_tempo is not None and not np.isnan(numeric_tempo):
             bpm_final = int(round(numeric_tempo))
 
@@ -80,12 +77,53 @@ def analizar_audio(audio_path):
         print(json.dumps(resultados))
 
     except Exception as e:
-        print(json.dumps({"error": f"Error en librosa al procesar el archivo: {str(e)}"}), file=sys.stderr)
+        print(json.dumps({"error": f"Error en librosa al analizar el archivo: {str(e)}"}), file=sys.stderr)
+        sys.exit(1)
+
+def generar_hash_perceptual(audio_path):
+    """
+    Genera un hash perceptual de los primeros 5 segundos de un archivo de audio.
+    """
+    try:
+        # Cargar solo los primeros 5 segundos del audio
+        audio, sr = librosa.load(audio_path, sr=None, mono=True, duration=5.0)
+
+        # Generar MFCCs (Mel-Frequency Cepstral Coefficients)
+        mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=13)
+        
+        # Para crear un hash consistente, tomamos la media de cada coeficiente a lo largo del tiempo
+        # y redondeamos a un número fijo de decimales para reducir variaciones menores.
+        mean_mfccs = np.mean(mfccs, axis=1)
+        
+        # --- INICIO DE LA CORRECCIÓN ---
+        rounded_mfccs = np.round(mean_mfccs, decimals=2) # Error corregido: era mean_efccs
+        # --- FIN DE LA CORRECCIÓN ---
+        
+        # Convertir el array de numpy a un string y luego a bytes para el hash
+        mfccs_string = "".join(map(str, rounded_mfccs))
+        
+        # Calcular el hash SHA256
+        hash_sha256 = hashlib.sha256(mfccs_string.encode()).hexdigest()
+        
+        print(json.dumps({"audio_hash": hash_sha256}))
+
+    except Exception as e:
+        print(json.dumps({"error": f"Error en librosa al generar el hash: {str(e)}"}), file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        analizar_audio(sys.argv[1])
+    if len(sys.argv) != 3:
+        print(json.dumps({"error": "Uso: python audio.py <comando> <ruta_del_archivo>"}), file=sys.stderr)
+        print(json.dumps({"error": "Comandos disponibles: analyze, hash"}), file=sys.stderr)
+        sys.exit(1)
+
+    comando = sys.argv[1]
+    ruta_archivo = sys.argv[2]
+
+    if comando == "analyze":
+        analizar_audio(ruta_archivo)
+    elif comando == "hash":
+        generar_hash_perceptual(ruta_archivo)
     else:
-        print(json.dumps({"error": "Uso: python audio.py <ruta_del_archivo>"}), file=sys.stderr)
+        print(json.dumps({"error": f"Comando '{comando}' no reconocido."}), file=sys.stderr)
         sys.exit(1)

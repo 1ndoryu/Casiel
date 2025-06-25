@@ -108,7 +108,7 @@ Analiza este audio. {$promptContextual}
 Tu tarea es generar únicamente un objeto JSON con la siguiente estructura. Sé creativo pero preciso.
 No incluyas campos que ya te he proporcionado en los datos técnicos.
 
-- nombre_archivo_base: Un nombre de archivo corto, descriptivo, en inglés, todo en minúsculas y usando guiones bajos como separadores (ej: "deep_kick_808", "sad_guitar_melody", "energetic_synth_loop").
+- nombre_archivo_base: Un título corto y descriptivo para el sample, en inglés, en minúsculas y usando espacios. NO uses guiones bajos. Debe ser legible por humanos. Ejemplos: "deep kick 808", "sad guitar melody", "energetic synth loop".
 - tags: Array de strings con etiquetas descriptivas (ej: "melodic", "dark", "808", "lo-fi").
 - tipo: String, "one shot" o "loop".
 - genero: Array de strings con géneros musicales (ej: "hip hop", "trap", "electronic").

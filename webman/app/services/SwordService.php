@@ -13,7 +13,6 @@ class SwordService
     protected string $apiKey;
     private const MAX_REINTENTOS_IA = 3;
 
-    // Se elimina la lista hardcodeada de aquí
     private array $knownRootFields = [];
 
     public function __construct(string $apiUrl, string $apiKey)
@@ -28,10 +27,9 @@ class SwordService
             'verify' => base_path() . '/config/certs/cacert.pem',
         ]);
         $this->apiKey = $apiKey;
-        // (MODIFICADO) Cargar los campos raíz desde la configuración
         $this->knownRootFields = config('api.sword.root_fields', []);
     }
-
+    
     public function obtenerSamplePendiente(): ?array
     {
         casielLog("Buscando un sample pendiente o fallido.");
@@ -62,10 +60,7 @@ class SwordService
     {
         try {
             $query = ['type' => 'sample', 'per_page' => $limite, 'sort_by' => 'created_at', 'order' => 'asc'];
-            if ($status !== null) {
-                // La API de SwordPHP no soporta buscar por metadata[ia_status], así que filtramos después.
-            }
-
+            
             $respuesta = $this->cliente->get('content', [
                 'headers' => ['Authorization' => 'Bearer ' . $this->apiKey, 'Accept' => 'application/json'],
                 'query' => $query
@@ -82,6 +77,32 @@ class SwordService
             return array_values($filtrados);
         } catch (GuzzleException $e) {
             $this->logError($e, "Error al buscar samples por status.");
+            return null;
+        }
+    }
+
+    public function buscarSamplePorHash(string $hash): ?array
+    {
+        casielLog("Buscando sample por hash: $hash");
+        try {
+            $respuesta = $this->cliente->get('content', [
+                'headers' => ['Authorization' => 'Bearer ' . $this->apiKey, 'Accept' => 'application/json'],
+                'query' => [
+                    'type' => 'sample',
+                    'per_page' => 1,
+                    'metadata' => ['audio_hash' => $hash]
+                ]
+            ]);
+            $datos = json_decode($respuesta->getBody()->getContents(), true);
+            $sample = $datos['data']['items'][0] ?? null;
+
+            if ($sample) {
+                casielLog("Se encontró un duplicado por hash. ID: " . $sample['id']);
+            }
+            return $sample;
+
+        } catch (GuzzleException $e) {
+            $this->logError($e, "Error al buscar sample por hash.");
             return null;
         }
     }
@@ -107,36 +128,26 @@ class SwordService
             return null;
         }
     }
-
-    /**
-     * Actualiza únicamente el campo metadata de un sample.
-     * Útil para operaciones simples como marcar estado.
-     */
+    
     public function actualizarMetadataSample(int $id, array $metadataNuevos): bool
     {
         casielLog("Actualizando solo metadata para el sample ID: $id.");
         return $this->actualizarSample($id, ['metadata' => $metadataNuevos]);
     }
-
-    /**
-     * Actualiza un sample con un payload que puede contener campos raíz y metadata.
-     * La función distribuye los campos automáticamente.
-     */
+    
     public function actualizarSample(int $id, array $payload): bool
     {
         $body = [];
         $metadata = $payload['metadata'] ?? [];
 
-        // Distribuir campos del payload raíz
         foreach ($payload as $key => $value) {
             if (in_array($key, $this->knownRootFields)) {
                 $body[$key] = $value;
-            } elseif ($key !== 'metadata') { // Si no es campo raíz ni la key 'metadata', va para adentro
+            } elseif ($key !== 'metadata') {
                 $metadata[$key] = $value;
             }
         }
 
-        // Asignar el objeto de metadata final al body si no está vacío
         if (!empty($metadata)) {
             $body['metadata'] = $metadata;
         }
@@ -174,7 +185,6 @@ class SwordService
                 'headers' => ['Authorization' => 'Bearer ' . $this->apiKey, 'Accept' => 'application/json']
             ]);
             $datos = json_decode($respuesta->getBody()->getContents(), true);
-            // La API devuelve el recurso dentro de una clave "data"
             return $datos['data'] ?? null;
         } catch (GuzzleException $e) {
             $this->logError($e, "Error al obtener el sample ID: $id.");
