@@ -10,3 +10,5 @@
 copiar.py
 webman/copiar.py
 /copiar.py
+*.look
+copiar.py

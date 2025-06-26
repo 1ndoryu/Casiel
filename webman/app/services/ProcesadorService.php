@@ -56,32 +56,17 @@ class ProcesadorService
                 $log['paso2_hash_generado'] = $hash;
                 $duplicado = $this->swordService->buscarSamplePorHash($hash);
 
-                // --- INICIO DE LA CORRECCIÓN DE ROBUSTEZ ---
-                // Si no se encuentra al instante, reintentamos tras una pausa.
-                // Esto soluciona delays de indexación en el backend.
-                if (!$duplicado) {
-                    casielLog("No se encontró duplicado en el primer intento. Reintentando en 2 segundos...", ['hash' => $hash, 'sample_id' => $idSample]);
-                    sleep(2);
-                    $duplicado = $this->swordService->buscarSamplePorHash($hash);
-                }
-
                 if ($duplicado && $duplicado['id'] != $idSample) {
-                    $statusOriginal = $duplicado['metadata']['ia_status'] ?? 'desconocido';
-                    // Solo lo consideramos un duplicado válido si el original fue procesado con éxito.
-                    if (str_starts_with($statusOriginal, 'completado')) {
-                        $log['paso2.1_duplicado_detectado'] = "Confirmado duplicado del ID: " . $duplicado['id'];
-                        $metadataUpdate = [
-                            'ia_status'       => 'duplicado',
-                            'duplicado_de_id' => $duplicado['id'],
-                            'audio_hash'      => $hash,
-                        ];
-                        $this->swordService->actualizarMetadataSample($idSample, array_merge($metadataActual, $metadataUpdate));
-                        $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal]);
-                        return $log; // Proceso finaliza aquí para el duplicado.
-                    }
-                    casielLog("Sample con mismo hash (ID: {$duplicado['id']}) encontrado pero no está 'completado' (estado: '$statusOriginal'). Se procesará como original.", ['sample_id' => $idSample]);
+                    $log['paso2.1_duplicado_detectado'] = "El sample es un duplicado del ID: " . $duplicado['id'];
+                    $metadataUpdate = [
+                        'ia_status' => 'duplicado',
+                        'es_duplicado' => true,
+                        'duplicado_de_id' => $duplicado['id'],
+                    ];
+                    $this->swordService->actualizarMetadataSample($idSample, array_merge($metadataActual, $metadataUpdate));
+                    $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal]);
+                    return $log;
                 }
-                // --- FIN DE LA CORRECCIÓN DE ROBUSTEZ ---
             } else {
                 $log['paso2_hash_generado'] = 'No se pudo generar el hash, se continua sin detección de duplicados.';
             }
