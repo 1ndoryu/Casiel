@@ -5,15 +5,17 @@ namespace app\process;
 use app\services\AudioAnalysisService;
 use app\services\GeminiService;
 use app\services\SwordApiService;
+use PhpAmqpLib\Message\AMQPMessage;
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Exception\AMQPProtocolChannelException;
+use PhpAmqpLib\Wire\AMQPTable;
+use Throwable;
 use Workerman\Worker;
 use Workerman\Http\Client;
-use PhpAmqpLib\Connection\AMQPStreamConnection;
-use PhpAmqpLib\Message\AMQPMessage;
-use Throwable;
 
 /**
  * Class AudioQueueConsumer
- * Consumes audio processing jobs from a RabbitMQ queue.
+ * Consumes audio processing jobs from a RabbitMQ queue with retry and dead-lettering logic.
  */
 class AudioQueueConsumer
 {
@@ -21,14 +23,8 @@ class AudioQueueConsumer
     private AudioAnalysisService $audioAnalysisService;
     private GeminiService $geminiService;
     private string $tempDir;
+    private const MAX_RETRIES = 3;
 
-    /**
-     * Constructor with dependency injection.
-     * Webman will automatically inject the services defined in config/dependence.php.
-     * @param SwordApiService $swordApiService
-     * @param AudioAnalysisService $audioAnalysisService
-     * @param GeminiService $geminiService
-     */
     public function __construct(
         SwordApiService $swordApiService,
         AudioAnalysisService $audioAnalysisService,
@@ -39,27 +35,51 @@ class AudioQueueConsumer
         $this->geminiService = $geminiService;
     }
 
-    /**
-     * This method is called when the process starts.
-     * @param Worker $worker
-     */
     public function onWorkerStart(Worker $worker)
     {
-        // Dependencies are already injected via the constructor.
-
-        // Setup temporary directory for audio files
         $this->tempDir = runtime_path() . '/tmp/audio_processing';
         if (!is_dir($this->tempDir)) {
             mkdir($this->tempDir, 0777, true);
         }
-        
+
         casiel_log('audio_processor', 'Iniciando consumidor de cola de audio...');
         $this->connectAndConsume();
     }
 
-    /**
-     * Connects to RabbitMQ and starts consuming messages.
-     */
+    private function setupQueues($channel): void
+    {
+        $mainExchange = 'casiel_main_exchange';
+        $dlx = 'casiel_dlx';
+        $retryDelay = 60000; // 1 minute in milliseconds
+
+        $channel->exchange_declare($mainExchange, 'direct', false, true, false);
+        $channel->exchange_declare($dlx, 'direct', false, true, false);
+
+        // 1. Final Dead-Letter Queue (for messages that fail all retries)
+        $finalDlq = 'casiel_audio_dlq';
+        $channel->queue_declare($finalDlq, false, true, false, false);
+        $channel->queue_bind($finalDlq, $dlx, 'casiel.dlq.final');
+
+        // 2. Retry-Wait Queue (holds messages for a delay before re-processing)
+        $retryQueue = 'casiel_audio_retry_queue';
+        $channel->queue_declare($retryQueue, false, true, false, false, new AMQPTable([
+            'x-message-ttl' => $retryDelay,
+            'x-dead-letter-exchange' => $mainExchange,
+            'x-dead-letter-routing-key' => 'casiel.process' // Route back to main work queue
+        ]));
+        $channel->queue_bind($retryQueue, $dlx, 'casiel.dlq.retry');
+
+        // 3. Main Work Queue
+        $workQueue = getenv('RABBITMQ_QUEUE_CASIEL');
+        $channel->queue_declare($workQueue, false, true, false, false, new AMQPTable([
+            'x-dead-letter-exchange' => $dlx,
+            'x-dead-letter-routing-key' => 'casiel.dlq.retry' // On failure, route to retry logic
+        ]));
+        $channel->queue_bind($workQueue, $mainExchange, 'casiel.process');
+
+        casiel_log('audio_processor', "Infraestructura de colas (trabajo, reintento, dlq) configurada exitosamente.");
+    }
+    
     private function connectAndConsume(): void
     {
         try {
@@ -71,24 +91,28 @@ class AudioQueueConsumer
                 getenv('RABBITMQ_VHOST')
             );
             $channel = $connection->channel();
+            $this->setupQueues($channel);
+
             $queueName = getenv('RABBITMQ_QUEUE_CASIEL');
-            $channel->queue_declare($queueName, false, true, false, false);
             casiel_log('audio_processor', "Escuchando en la cola: '{$queueName}'");
 
-            $callback = function (AMQPMessage $msg) {
+            $callback = function (AMQPMessage $msg) use ($channel) {
                 casiel_log('audio_processor', "Mensaje recibido de la cola.", ['body' => $msg->body]);
-                // This starts the async workflow.
-                $this->processMessage($msg);
+                $this->processMessage($msg, $channel);
             };
 
             $channel->basic_consume($queueName, '', false, false, false, false, $callback);
 
             while ($channel->is_consuming()) {
-                $channel->wait(null, false, 5); // Use a timeout to prevent hard blocking
+                $channel->wait(null, false, 5);
             }
 
             $channel->close();
             $connection->close();
+        } catch (AMQPProtocolChannelException $e) {
+            casiel_log('audio_processor', 'Error de protocolo con RabbitMQ. Puede que las colas ya existan con otras propiedades. Revisa la configuración.', ['error' => $e->getMessage()], 'error');
+            sleep(30);
+            $this->connectAndConsume();
         } catch (Throwable $e) {
             casiel_log('audio_processor', 'No se pudo conectar o consumir de RabbitMQ. Reintentando en 10s.', [
                 'error' => $e->getMessage(),
@@ -97,56 +121,73 @@ class AudioQueueConsumer
             $this->connectAndConsume();
         }
     }
-    
-    /**
-     * Initiates the asynchronous processing of a single message from the queue.
-     * @param AMQPMessage $msg
-     */
-    private function processMessage(AMQPMessage $msg): void
+
+    private function processMessage(AMQPMessage $msg, $channel): void
     {
         $payload = json_decode($msg->body, true);
         $contentId = $payload['data']['id'] ?? null;
+        $filesToDelete = [];
 
         if (json_last_error() !== JSON_ERROR_NONE || !$contentId) {
-            casiel_log('audio_processor', 'Mensaje inválido o sin ID de contenido. Descartando.', ['body' => $msg->body], 'warning');
+            casiel_log('audio_processor', 'Mensaje inválido o sin ID de contenido. Descartando permanentemente.', ['body' => $msg->body], 'error');
+            // Publish to final DLQ without retrying
+            $channel->basic_publish($msg, 'casiel_dlx', 'casiel.dlq.final');
             $msg->ack();
             return;
         }
 
-        casiel_log('audio_processor', "Iniciando flujo asíncrono para contenido ID: {$contentId}");
-
-        $filesToDelete = [];
-
-        $onError = function (string $errorMessage) use ($msg, $contentId, &$filesToDelete) {
+        $onError = function (string $errorMessage) use ($msg, $contentId, &$filesToDelete, $channel) {
             casiel_log('audio_processor', "Error procesando ID {$contentId}: {$errorMessage}", [], 'error');
-            // Here you could implement a dead-letter queue or retry logic
-            // For now, we acknowledge to prevent reprocessing a failed job.
-            foreach($filesToDelete as $file) {
+
+            // Always clean up temp files on any error to ensure a clean state for retries.
+            foreach ($filesToDelete as $file) {
                 if (file_exists($file)) unlink($file);
             }
-            $msg->ack();
+
+            $retryCount = 0;
+            if ($msg->has('application_headers')) {
+                $headers = $msg->get('application_headers')->getNativeData();
+                if (isset($headers['x-death'])) {
+                    foreach ($headers['x-death'] as $death) {
+                        if ($death['queue'] === getenv('RABBITMQ_QUEUE_CASIEL')) {
+                            $retryCount = $death['count'];
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if ($retryCount < self::MAX_RETRIES) {
+                casiel_log('audio_processor', "Fallo en procesamiento. Reintentando (" . ($retryCount + 1) . "/" . (self::MAX_RETRIES + 1) . ").", ['content_id' => $contentId]);
+                $msg->nack(false); // Nack to trigger the dead-lettering to retry queue
+            } else {
+                casiel_log('audio_processor', "Fallo final después de " . ($retryCount + 1) . " intentos. Enviando a la cola de letras muertas.", ['content_id' => $contentId], 'error');
+                $channel->basic_publish($msg, 'casiel_dlx', 'casiel.dlq.final');
+                $msg->ack();
+            }
         };
 
-        // STEP 1: Get media details from Sword to find the audio URL
-        $this->swordApiService->getMediaDetails($contentId, 
-            function ($mediaDetails) use ($contentId, $onError, &$filesToDelete, $msg) {
+        casiel_log('audio_processor', "Iniciando flujo asíncrono para contenido ID: {$contentId}");
+
+        // STEP 1: Get media details from Sword
+        $this->swordApiService->getMediaDetails($contentId,
+            function ($mediaDetails) use ($contentId, $onError, &$filesToDelete, $msg, $channel) {
                 $audioUrl = $mediaDetails['path'] ?? null;
-                if (!$audioUrl || !isset($mediaDetails['metadata']['original_name'])) {
+                $originalFilename = $mediaDetails['metadata']['original_name'] ?? 'audio.tmp';
+                if (!$audioUrl) {
                     $onError("No se encontró la ruta del audio (path) en los detalles del medio de Sword.");
                     return;
                 }
-                
-                $fullAudioUrl = getenv('SWORD_API_URL') . '/' . ltrim($audioUrl, '/');
-                $originalFilename = pathinfo($mediaDetails['metadata']['original_name'], PATHINFO_FILENAME);
-                $originalExtension = pathinfo($mediaDetails['metadata']['original_name'], PATHINFO_EXTENSION);
-                
-                $localPath = "{$this->tempDir}/{$contentId}_original.{$originalExtension}";
+
+                $fullAudioUrl = rtrim(getenv('SWORD_API_URL'), '/') . '/' . ltrim($audioUrl, '/');
+                $extension = pathinfo($originalFilename, PATHINFO_EXTENSION) ?: 'tmp';
+                $localPath = "{$this->tempDir}/{$contentId}_original.{$extension}";
                 $filesToDelete[] = $localPath;
                 casiel_log('audio_processor', "Paso 1 completado. URL de audio: {$fullAudioUrl}");
 
-                // STEP 2: Download the audio file asynchronously
+                // STEP 2: Download the audio file
                 $httpClient = new Client();
-                $httpClient->get($fullAudioUrl, [], function ($response) use ($localPath, $contentId, $onError, $originalFilename, &$filesToDelete, $msg) {
+                $httpClient->get($fullAudioUrl, [], function ($response) use ($localPath, $contentId, $onError, $originalFilename, &$filesToDelete, $msg, $channel) {
                     if ($response->getStatusCode() !== 200) {
                         $onError("No se pudo descargar el archivo de audio. Status: " . $response->getStatusCode());
                         return;
@@ -154,7 +195,7 @@ class AudioQueueConsumer
                     file_put_contents($localPath, (string)$response->getBody());
                     casiel_log('audio_processor', "Paso 2 completado. Audio descargado en: {$localPath}");
 
-                    // STEP 3: Get technical metadata (this is currently synchronous)
+                    // STEP 3: Get technical metadata
                     $techData = $this->audioAnalysisService->analyze($localPath);
                     if ($techData === null) {
                         $onError("Falló el análisis técnico del audio.");
@@ -163,9 +204,9 @@ class AudioQueueConsumer
                     casiel_log('audio_processor', "Paso 3 completado. Metadatos técnicos obtenidos.");
 
                     // STEP 4: Get creative metadata from Gemini
-                    $geminiContext = ['title' => $originalFilename, 'technical_metadata' => $techData];
+                    $geminiContext = ['title' => pathinfo($originalFilename, PATHINFO_FILENAME), 'technical_metadata' => $techData];
                     $this->geminiService->analyzeAudio($localPath, $geminiContext,
-                        function ($creativeData) use ($techData, $contentId, $onError, $localPath, &$filesToDelete, $msg) {
+                        function ($creativeData) use ($techData, $contentId, $onError, $localPath, &$filesToDelete, $msg, $channel) {
                             if ($creativeData === null) {
                                 $onError("Falló el análisis creativo con Gemini.");
                                 return;
@@ -181,8 +222,8 @@ class AudioQueueConsumer
                             }
                             casiel_log('audio_processor', "Paso 5 completado. Versión ligera generada.");
 
-                            // STEP 6: Upload lightweight version to Sword
-                            $this->swordApiService->uploadMedia($lightweightPath, 
+                            // STEP 6: Upload lightweight version
+                            $this->swordApiService->uploadMedia($lightweightPath,
                                 function ($lightweightMediaData) use ($techData, $creativeData, $contentId, $onError, &$filesToDelete, $msg) {
                                     $lightweightUrl = $lightweightMediaData['path'] ?? null;
                                     if (!$lightweightUrl) {
@@ -190,39 +231,37 @@ class AudioQueueConsumer
                                         return;
                                     }
                                     casiel_log('audio_processor', "Paso 6 completado. Versión ligera subida a: {$lightweightUrl}");
-                                    
-                                    // STEP 7: Merge all data and update content in Sword
+
+                                    // STEP 7: Merge data and update Sword
                                     $newFileNameBase = $creativeData['nombre_archivo_base'] ?? "audio_sample_{$contentId}";
                                     $randomSuffix = substr(bin2hex(random_bytes(4)), 0, 4);
                                     $finalData = [
                                         'content_data' => array_merge($creativeData, $techData, ['light_version_url' => $lightweightUrl]),
-                                        'slug' => str_replace(' ', '_', $newFileNameBase) . "_{$randomSuffix}" // new filename
+                                        'slug' => str_replace(' ', '_', $newFileNameBase) . "_{$randomSuffix}"
                                     ];
 
-                                    $this->swordApiService->updateContent($contentId, $finalData, 
+                                    $this->swordApiService->updateContent($contentId, $finalData,
                                         function () use ($contentId, &$filesToDelete, $msg) {
                                             casiel_log('audio_processor', "Paso 7 completado. Contenido {$contentId} actualizado en Sword.");
-                                            
-                                            // STEP 8: Cleanup and acknowledge
                                             foreach ($filesToDelete as $file) {
                                                 if (file_exists($file)) unlink($file);
                                             }
                                             casiel_log('audio_processor', "Procesamiento del ID {$contentId} completado exitosamente. Archivos temporales eliminados.");
                                             $msg->ack();
                                         },
-                                        $onError // On final update failure
+                                        $onError
                                     );
-                                }, 
-                                $onError // On lightweight upload failure
+                                },
+                                $onError
                             );
-                        }, 
-                        $onError // On Gemini failure
+                        },
+                        $onError
                     );
                 }, function ($exception) use ($onError) {
                     $onError("Excepción al descargar el archivo: " . $exception->getMessage());
                 });
-            }, 
-            $onError // On getMediaDetails failure
+            },
+            $onError
         );
     }
 }
