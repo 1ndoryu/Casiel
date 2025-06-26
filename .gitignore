@@ -19,3 +19,4 @@ gemini.md
 .gitignore
 *.lock
 documentacion-api.md
+status.md
