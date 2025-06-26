@@ -22,30 +22,32 @@ class ProcesadorService
     {
         $log = [];
         $idSample = $sample['id'];
-        $metadataActual = $sample['metadata'] ?? [];
+        // Toda la data custom ahora vive en 'content_data'
+        $contentDataActual = $sample['content_data'] ?? [];
         $statusSuffix = $esForzado ? '_forzado' : '';
         $rutaTemporalOriginal = null;
         $rutaTemporalLigero = null;
 
         casielLog("Iniciando procesamiento para sample ID: $idSample", ['esForzado' => $esForzado]);
 
-        $mediaId = $metadataActual['media_id'] ?? null;
+        $mediaId = $contentDataActual['media_id'] ?? null;
 
         if (!$mediaId) {
-            throw new \Exception("El sample ID: $idSample no tiene 'media_id' en su metadata. No se puede procesar.");
+            throw new \Exception("El sample ID: $idSample no tiene 'media_id' en su content_data. No se puede procesar.");
         }
 
-        $this->swordService->actualizarMetadataSample($idSample, array_merge($metadataActual, ['ia_status' => 'procesando' . $statusSuffix]));
+        // Marcamos el sample como 'procesando'
+        $this->swordService->updateContentData($idSample, array_merge($contentDataActual, ['ia_status' => 'procesando' . $statusSuffix]));
         $log['paso1_marcar_procesando'] = "Sample ID: $idSample marcado como 'procesando{$statusSuffix}'.";
 
         try {
             // FASE 1: Descargar y generar hash para detección de duplicados
-            $contenidoAudio = $this->swordService->descargarAudioPorMediaId($mediaId);
+            $contenidoAudio = $this->swordService->downloadAudioByMediaId($mediaId);
             if (!$contenidoAudio) {
                 throw new \Exception("No se pudo descargar el audio desde Sword para el media_id: $mediaId");
             }
 
-            $nombreOriginal = $metadataActual['nombre_archivo_original'] ?? $sample['titulo'] ?? 'audio.tmp';
+            $nombreOriginal = $contentDataActual['nombre_archivo_original'] ?? ($sample['content_data']['title'] ?? 'audio.tmp');
             $extensionOriginal = pathinfo($nombreOriginal, PATHINFO_EXTENSION) ?: 'tmp';
             $rutaTemporalOriginal = $this->audioUtil->guardarContenidoTemporal($contenidoAudio, $nombreOriginal);
             $log['paso1.1_descarga'] = "Audio guardado en: $rutaTemporalOriginal";
@@ -54,16 +56,16 @@ class ProcesadorService
 
             if ($hash) {
                 $log['paso2_hash_generado'] = $hash;
-                $duplicado = $this->swordService->buscarSamplePorHash($hash);
+                $duplicado = $this->swordService->findContentByHash($hash);
 
                 if ($duplicado && $duplicado['id'] != $idSample) {
                     $log['paso2.1_duplicado_detectado'] = "El sample es un duplicado del ID: " . $duplicado['id'];
-                    $metadataUpdate = [
+                    $dataUpdate = [
                         'ia_status' => 'duplicado',
                         'es_duplicado' => true,
                         'duplicado_de_id' => $duplicado['id'],
                     ];
-                    $this->swordService->actualizarMetadataSample($idSample, array_merge($metadataActual, $metadataUpdate));
+                    $this->swordService->updateContentData($idSample, array_merge($contentDataActual, $dataUpdate));
                     $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal]);
                     return $log;
                 }
@@ -75,7 +77,7 @@ class ProcesadorService
             $rutaTemporalLigero = $this->audioUtil->crearVersionLigeraTemporal($rutaTemporalOriginal);
             $log['paso3_conversion_temporal'] = 'Versión ligera temporal creada.';
 
-            $contextoIA = ['titulo' => $sample['titulo']];
+            $contextoIA = ['titulo' => $contentDataActual['title'] ?? ''];
             $metadataGeneradaIA = $this->geminiService->analizarAudio($rutaTemporalLigero, $contextoIA);
             if (!$metadataGeneradaIA || empty($metadataGeneradaIA['nombre_archivo_base'])) {
                 throw new \Exception("El análisis de Gemini falló o no devolvió un 'nombre_archivo_base'.");
@@ -101,8 +103,8 @@ class ProcesadorService
             $log['paso6_almacenamiento_final'] = $resultadoAlmacenamiento;
 
             // FASE 4: Actualización final en Sword
-            $metadataFinal = array_merge(
-                $metadataActual,
+            $contentDataFinal = array_merge(
+                $contentDataActual,
                 $metadataTecnica,
                 $metadataGeneradaIA,
                 [
@@ -115,27 +117,27 @@ class ProcesadorService
                 ]
             );
 
-            $exito = $this->swordService->actualizarSample($idSample, $metadataFinal);
+            $exito = $this->swordService->updateContentData($idSample, $contentDataFinal);
 
             if (!$exito) {
                 throw new \Exception("La actualización final en Sword API falló.");
             }
 
-            $log['paso7_actualizacion_final'] = ['status' => 'ok', 'payload_enviado' => $metadataFinal];
+            $log['paso7_actualizacion_final'] = ['status' => 'ok', 'payload_enviado' => ['content_data' => $contentDataFinal]];
             $log['fin'] = 'Proceso finalizado con éxito.';
 
             $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal, $rutaTemporalLigero]);
         } catch (Throwable $e) {
             $this->audioUtil->limpiarTemporal([$rutaTemporalOriginal, $rutaTemporalLigero]);
 
-            $retryCount = ($metadataActual['ia_retry_count'] ?? 0) + 1;
-            $metadataError = array_merge($metadataActual, [
+            $retryCount = ($contentDataActual['ia_retry_count'] ?? 0) + 1;
+            $dataError = array_merge($contentDataActual, [
                 'ia_status' => 'fallido' . $statusSuffix,
                 'ia_retry_count' => $retryCount,
                 'ia_last_error' => substr($e->getMessage(), 0, 500)
             ]);
 
-            $this->swordService->actualizarMetadataSample($idSample, $metadataError);
+            $this->swordService->updateContentData($idSample, $dataError);
             throw $e;
         }
 
