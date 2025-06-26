@@ -34,6 +34,27 @@ class AudioUtil
         if (!is_dir($this->storagePublicos)) mkdir($this->storagePublicos, 0777, true);
     }
 
+    /**
+     * Guarda contenido binario de audio en un archivo temporal.
+     * @param string $contenido El contenido del archivo de audio.
+     * @param string $nombreSugerido Un nombre de archivo para usar como base (ej. 'mi_sample.mp3').
+     * @return string La ruta al archivo temporal creado.
+     */
+    public function guardarContenidoTemporal(string $contenido, string $nombreSugerido): string
+    {
+        // Limpia el nombre sugerido para evitar problemas con la ruta
+        $nombreBase = basename(parse_url($nombreSugerido, PHP_URL_PATH));
+        if (empty($nombreBase)) {
+            $nombreBase = 'audio.tmp';
+        }
+        
+        $rutaDestino = $this->tempDir . '/' . uniqid('orig_', true) . '_' . $nombreBase;
+        
+        file_put_contents($rutaDestino, $contenido);
+        casielLog("Contenido de audio guardado temporalmente en: $rutaDestino");
+        return $rutaDestino;
+    }
+
     public function descargarAudio(string $url): string
     {
         $nombreArchivo = basename(parse_url($url, PHP_URL_PATH));
@@ -48,6 +69,7 @@ class AudioUtil
         return $rutaDestino;
     }
 
+    // ... (resto de métodos sin cambios: crearVersionLigeraTemporal, ejecutarAnalisisPython, etc.) ...
     public function crearVersionLigeraTemporal(string $rutaAudioOriginal): string
     {
         $rutaDestino = $this->tempDir . '/' . uniqid('light_', true) . '.mp3';
@@ -95,7 +117,6 @@ class AudioUtil
     
     public function guardarArchivosPermanentes(string $rutaTemporalOriginal, string $rutaTemporalLigero, string $nombreArchivoBaseFinal, string $extensionOriginal): array
     {
-        // Limpiamos el nombre base para que sea seguro para un nombre de archivo
         $nombreBaseSeguro = preg_replace('/[\\\\\/:"*?<>|]/', '', $nombreArchivoBaseFinal);
         
         $nombreLigeroFinal = $nombreBaseSeguro . '_ligero.mp3';
@@ -104,7 +125,6 @@ class AudioUtil
         $rutaFinalLigero = $this->storagePublicos . '/' . $nombreLigeroFinal;
         $rutaFinalOriginal = $this->storageOriginals . '/' . $nombreOriginalFinal;
 
-        // Mover los archivos a su destino final (más eficiente que copiar)
         rename($rutaTemporalLigero, $rutaFinalLigero);
         rename($rutaTemporalOriginal, $rutaFinalOriginal);
 

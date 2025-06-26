@@ -3,16 +3,16 @@
 use Webman\Route;
 use app\controller\TestController;
 use app\controller\AudioController;
-use app\middleware\InternalAuthMiddleware; // Importar Middleware
+use app\middleware\InternalAuthMiddleware;
 
-// Rutas para la interfaz de pruebas de Casiel
+// (MODIFICADO) Ruta principal para la suite de pruebas
 Route::get('/test', [TestController::class, 'index']);
-Route::post('/test/run', [TestController::class, 'ejecutarTest']);
-Route::post('/test/force-run', [TestController::class, 'ejecutarTestForzado']);
+Route::post('/test/run-full', [TestController::class, 'ejecutarTestCompleto']);
 
 // Ruta para servir los audios ligeros públicamente
+// Se modifica para asegurar que el nombre de archivo pueda contener espacios y otros caracteres
 Route::get('/samples/stream/{file:.+}', [AudioController::class, 'stream']);
 
-// (MODIFICADO) Ruta protegida para que Sword pueda descargar audios originales
+// Ruta protegida para que Sword pueda descargar audios originales
 Route::get('/samples/original/{file:.+}', [AudioController::class, 'downloadOriginal'])
     ->middleware(InternalAuthMiddleware::class);

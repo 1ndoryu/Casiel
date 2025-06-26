@@ -12,9 +12,15 @@ return [
         'public_url_base' => '/samples'
     ],
 
-    // (NUEVO) Parámetros para la convención de nombres
     'naming' => [
         'brand_name' => 'kamples',
+    ],
+
+    // (NUEVO) Configuración para el cliente HTTP que se conecta a Sword
+    'sword_client' => [
+        // Cambia a 'false' para tests locales si experimentas errores de SSL.
+        // ¡IMPORTANTE! Debe ser 'true' en producción por seguridad.
+        'verify_ssl' => true,
     ],
 
     'rabbitmq' => [
