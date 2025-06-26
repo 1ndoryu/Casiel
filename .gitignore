@@ -7,3 +7,15 @@ webman/copiar.py
 copiar.py
 webman/copiar.py
 /copiar.py
+/runtime
+/.idea
+/.vscode
+/vendor
+*.log
+.env
+/tests/tmp
+/tests/.phpunit.result.cache
+gemini.md
+.gitignore
+*.lock
+documentacion-api.md
