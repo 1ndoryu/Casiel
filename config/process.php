@@ -4,6 +4,10 @@ use support\Log;
 use support\Request;
 use app\process\Http;
 use app\process\AudioQueueConsumer;
+use app\services\SwordApiService;
+use app\services\AudioAnalysisService;
+use app\services\GeminiService;
+use Workerman\Http\Client as HttpClient;
 
 global $argv;
 
@@ -51,5 +55,12 @@ return [
     // RabbitMQ consumer process
     'audio_queue_consumer' => [
         'handler' => AudioQueueConsumer::class,
+        // SOLUCIÓN DEFINITIVA: Instanciamos manualmente las dependencias aquí.
+        // Esto evita cualquier problema con la carga de configuración o el contenedor de DI.
+        'constructor' => [
+            'swordApiService' => new SwordApiService(new HttpClient()),
+            'audioAnalysisService' => new AudioAnalysisService(),
+            'geminiService' => new GeminiService()
+        ]
     ]
 ];

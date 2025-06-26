@@ -42,7 +42,8 @@
         "php-amqplib/php-amqplib": "^3.7",
         "laminas/laminas-diactoros": "^3.6",
         "firebase/php-jwt": "^6.11",
-        "workerman/http-client": "^3.0"
+        "workerman/http-client": "^3.0",
+        "symfony/process": "^7.1"
     },
     "suggest": {
         "ext-event": "For better performance. "
@@ -52,6 +53,7 @@
             "": "./",
             "app\\": "app/",
             "App\\": "app/",
+            "app\\services\\": "app/services/",
             "app\\View\\Components\\": "app/view/components",
             "support\\": "support/"
         },
@@ -75,7 +77,8 @@
     "require-dev": {
         "barryvdh/laravel-ide-helper": "^3.5",
         "pestphp/pest": "^2.0",
-        "guzzlehttp/guzzle": "^7.0"
+        "guzzlehttp/guzzle": "^7.0",
+        "mockery/mockery": "^1.6"
     },
     "config": {
         "allow-plugins": {

@@ -89,7 +89,9 @@ if (\$timezone = \$appConfig['default_timezone'] ?? '') {
     date_default_timezone_set(\$timezone);
 }
 
-App::loadAllConfig(['route']);
+// SOLUCIÓN: Cargar TODA la configuración, no solo las rutas.
+// Se cambió ['route'] por un array vacío [].
+App::loadAllConfig([]);
 
 worker_start('$processParam', $configParam);
 

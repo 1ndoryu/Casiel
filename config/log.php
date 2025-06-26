@@ -80,4 +80,28 @@ return [
             ]
         ],
     ],
+    
+    // Canal específico para las interacciones con la API de Gemini
+    'gemini_api' => [
+        'handlers' => [
+            [
+                'class' => RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/gemini_api.log',
+                    $maxFiles,
+                    $logLevel,
+                ],
+                'formatter' => $formatter,
+            ],
+            [
+                'class' => RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/master.log',
+                    $maxFiles,
+                    $logLevel,
+                ],
+                'formatter' => $formatter,
+            ]
+        ],
+    ],
 ];
