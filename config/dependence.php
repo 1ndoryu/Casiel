@@ -9,16 +9,16 @@ use Workerman\Http\Client as HttpClient;
  * Service container definitions.
  */
 return [
-    SwordApiService::class => function() {
+    SwordApiService::class => function () {
         // Inject the http client to make the service testable
         return new SwordApiService(new HttpClient());
     },
-    AudioAnalysisService::class => function() {
+    AudioAnalysisService::class => function () {
         return new AudioAnalysisService();
     },
-    GeminiService::class => function() {
-        // In the future, this service could also benefit from http client injection
-        return new GeminiService();
+    GeminiService::class => function () {
+        // This service now requires an HttpClient for testability
+        return new GeminiService(new HttpClient());
     }
     // Se eliminó la definición de AudioQueueConsumer::class de aquí,
     // ya que ahora se gestiona en config/process.php

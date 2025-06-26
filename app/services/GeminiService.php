@@ -11,12 +11,14 @@ use Throwable;
 class GeminiService
 {
     protected string $apiUrl;
+    private Client $httpClient;
 
-    public function __construct()
+    public function __construct(Client $httpClient)
     {
         $apiKey = getenv('GEMINI_API_KEY');
         $modelId = getenv('GEMINI_MODEL_ID');
         $this->apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/{$modelId}:generateContent?key={$apiKey}";
+        $this->httpClient = $httpClient;
     }
 
     /**
@@ -61,8 +63,7 @@ class GeminiService
                 ],
             ];
 
-            $httpClient = new Client();
-            $httpClient->post($this->apiUrl, [
+            $this->httpClient->post($this->apiUrl, [
                 'headers' => ['Content-Type' => 'application/json'],
                 'json' => $requestBody,
                 'timeout' => 90.0,
@@ -71,7 +72,7 @@ class GeminiService
                     $onError("La API de Gemini respondió con el código de estado: " . $response->getStatusCode());
                     return;
                 }
-                
+
                 $responseBody = json_decode((string)$response->getBody(), true);
 
                 if (isset($responseBody['candidates'][0]['content']['parts'][0]['text'])) {
@@ -86,7 +87,6 @@ class GeminiService
                 casiel_log('gemini_api', "Excepción en la petición a Gemini API.", ['error' => $exception->getMessage()], 'error');
                 $onError("Excepción en la petición a Gemini API: " . $exception->getMessage());
             });
-
         } catch (Throwable $e) {
             casiel_log('gemini_api', "Error al procesar el audio para Gemini.", ['error' => $e->getMessage()], 'error');
             $onError("Error al procesar el audio: " . $e->getMessage());

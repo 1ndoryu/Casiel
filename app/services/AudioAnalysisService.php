@@ -18,6 +18,18 @@ class AudioAnalysisService
     }
 
     /**
+     * Creates a new Process instance.
+     * This method is protected to allow mocking during tests.
+     *
+     * @param array $command
+     * @return Process
+     */
+    protected function createProcess(array $command): Process
+    {
+        return new Process($command);
+    }
+
+    /**
      * Analyzes an audio file to get technical metadata (BPM, key, etc.).
      *
      * @param string $filePath The absolute path to the audio file.
@@ -33,7 +45,7 @@ class AudioAnalysisService
         }
 
         try {
-            $process = new Process(['python3', $this->pythonScriptPath, 'analyze', $filePath]);
+            $process = $this->createProcess(['python3', $this->pythonScriptPath, 'analyze', $filePath]);
             $process->setTimeout(120); // 2 minutes timeout for analysis
             $process->run();
 
@@ -79,13 +91,15 @@ class AudioAnalysisService
             // Use ffmpeg to convert to a 96kbps MP3
             $command = [
                 'ffmpeg',
-                '-i', $inputPath,
-                '-b:a', '96k', // Set audio bitrate to 96kbps
+                '-i',
+                $inputPath,
+                '-b:a',
+                '96k', // Set audio bitrate to 96kbps
                 '-y', // Overwrite output file if it exists
                 $outputPath
             ];
 
-            $process = new Process($command);
+            $process = $this->createProcess($command);
             $process->setTimeout(180); // 3 minutes timeout for conversion
             $process->run();
 
@@ -98,7 +112,6 @@ class AudioAnalysisService
 
             casiel_log('audio_processor', "Versión ligera creada en: {$outputPath}");
             return true;
-
         } catch (Throwable $e) {
             casiel_log('audio_processor', 'Excepción durante la generación de la versión ligera.', [
                 'error' => $e->getMessage()

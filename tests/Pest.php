@@ -11,6 +11,12 @@
 |
 */
 
+// Primero, arrancamos la aplicación Webman.
+// Esto cargará el .env, las funciones de ayuda y otras configuraciones.
+require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/../support/bootstrap.php';
+
+
 // uses(Tests\TestCase::class)->in('Feature');
 
 /*

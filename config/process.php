@@ -44,7 +44,10 @@ return [
             ], glob(base_path() . '/plugin/*/app'), glob(base_path() . '/plugin/*/config'), glob(base_path() . '/plugin/*/api')),
             // Files with these suffixes will be monitored
             'monitorExtensions' => [
-                'php', 'html', 'htm', 'env'
+                'php',
+                'html',
+                'htm',
+                'env'
             ],
             'options' => [
                 'enable_file_monitor' => !in_array('-d', $argv) && DIRECTORY_SEPARATOR === '/',
@@ -60,7 +63,7 @@ return [
         'constructor' => [
             'swordApiService' => new SwordApiService(new HttpClient()),
             'audioAnalysisService' => new AudioAnalysisService(),
-            'geminiService' => new GeminiService()
+            'geminiService' => new GeminiService(new HttpClient())
         ]
     ]
 ];
