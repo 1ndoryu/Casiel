@@ -1,9 +1,9 @@
 <?php
 
-
 use support\Log;
 use support\Request;
 use app\process\Http;
+use app\process\AudioQueueConsumer;
 
 global $argv;
 
@@ -47,5 +47,9 @@ return [
                 'enable_memory_monitor' => DIRECTORY_SEPARATOR === '/',
             ]
         ]
+    ],
+    // RabbitMQ consumer process
+    'audio_queue_consumer' => [
+        'handler' => AudioQueueConsumer::class,
     ]
 ];
