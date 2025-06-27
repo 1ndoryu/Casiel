@@ -23,22 +23,21 @@ beforeEach(function () {
     }
     mkdir($this->tempDir, 0777, true);
 
-    // Mock the main dependencies of the consumer
+    // Mock ALL main dependencies of the consumer for true unit/integration testing
     $this->swordApiMock = Mockery::mock(SwordApiService::class);
     $this->geminiApiMock = Mockery::mock(GeminiService::class);
     $this->httpClientMock = Mockery::mock(Client::class);
     $this->channelMock = Mockery::mock(AMQPChannel::class);
+    // SOLUCIÓN: Mockear AudioAnalysisService para aislar el test del entorno (Python/ffmpeg)
+    $this->audioAnalysisMock = Mockery::mock(AudioAnalysisService::class);
 
-    // Use the real audio analysis service to test the interaction with python and ffmpeg.
-    $this->audioAnalysisService = new AudioAnalysisService(base_path('audio.py'));
-
-    // Path to the real audio file for testing
+    // Path to a real audio file for testing download simulation
     $this->realAudioPath = base_path('tests/Melancholic Guitar_Eizn_2upra.mp3');
 
-    // Instantiate the consumer with real and mocked dependencies
+    // Instantiate the consumer with mocked dependencies
     $this->consumer = new class(
         $this->swordApiMock,
-        $this->audioAnalysisService,
+        $this->audioAnalysisMock, // Usar el mock
         $this->geminiApiMock,
         $this->httpClientMock
     ) extends AudioQueueConsumer {
@@ -75,14 +74,14 @@ test('proceso completo de un audio real de forma exitosa', function () {
 
     // --- ARRANGE ---
 
-    // 1. Sword will provide the media details
+    // 1. Sword provides media details
     $this->swordApiMock->shouldReceive('getMediaDetails')
         ->once()->with($contentId, Mockery::any(), Mockery::any())
         ->andReturnUsing(function ($id, $onSuccess) {
             $onSuccess(['path' => 'uploads/test.mp3', 'metadata' => ['original_name' => 'test_audio.mp3']]);
         });
 
-    // 2. Simulate downloading the real audio file
+    // 2. Simulate downloading the audio file
     $this->httpClientMock->shouldReceive('get')
         ->once()->with(Mockery::any(), [], Mockery::any(), Mockery::any())
         ->andReturnUsing(function ($url, $options, $onSuccess) {
@@ -90,28 +89,40 @@ test('proceso completo de un audio real de forma exitosa', function () {
             $onSuccess($response);
         });
 
-    // 3. Gemini will provide the creative metadata
+    // 3. AudioAnalysisService provides technical metadata
+    $this->audioAnalysisMock->shouldReceive('analyze')
+        ->once()->with(Mockery::on(fn($path) => file_exists($path)))
+        ->andReturn(['bpm' => 120, 'tonalidad' => 'E', 'escala' => 'minor']);
+
+    // 4. Gemini provides creative metadata
     $this->geminiApiMock->shouldReceive('analyzeAudio')
         ->once()->with(Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
         ->andReturnUsing(function ($path, $context, $onSuccess) {
-            expect(file_exists($path))->toBeTrue(); // Verify the temporary file exists
+            expect(file_exists($path))->toBeTrue();
             $onSuccess(['nombre_archivo_base' => 'melancholic test guitar', 'tags' => ['test', 'guitar']]);
         });
+        
+    // 5. AudioAnalysisService generates lightweight version
+    $this->audioAnalysisMock->shouldReceive('generateLightweightVersion')
+        ->once()->with(Mockery::any(), Mockery::on(fn($path) => str_ends_with($path, '_light.mp3')))
+        ->andReturnUsing(function ($input, $output) {
+            // Simulate file creation for the next step
+            create_dummy_file($output, 'light-version-data');
+            return true;
+        });
 
-    // 4. Sword will receive the new lightweight version
+    // 6. Sword receives the new lightweight version
     $this->swordApiMock->shouldReceive('uploadMedia')
-        ->once()->with(Mockery::on(function ($path) {
-            return str_ends_with($path, '_light.mp3') && file_exists($path); // Verify the lightweight file exists
-        }), Mockery::any(), Mockery::any())
+        ->once()->with(Mockery::on(fn($path) => file_exists($path)), Mockery::any(), Mockery::any())
         ->andReturnUsing(function ($path, $onSuccess) {
             $onSuccess(['path' => 'uploads/light_version.mp3']);
         });
 
-    // 5. Sword will receive the final content update
+    // 7. Sword receives the final content update
     $this->swordApiMock->shouldReceive('updateContent')
         ->once()->with($contentId, Mockery::on(function ($data) {
             expect($data['slug'])->toStartWith('melancholic_test_guitar_');
-            expect($data['content_data']['bpm'])->toBeInt();
+            expect($data['content_data']['bpm'])->toBe(120);
             expect($data['content_data']['light_version_url'])->toBe('uploads/light_version.mp3');
             return true;
         }), Mockery::any(), Mockery::any())
@@ -119,10 +130,14 @@ test('proceso completo de un audio real de forma exitosa', function () {
             $onSuccess();
         });
 
-    // 6. Mock the AMQP Message itself to prevent errors
+    // 8. Mock the AMQP Message: robustly define expectations for success AND failure paths
     $amqpMessageMock = Mockery::mock(AMQPMessage::class);
     $amqpMessageMock->body = json_encode(['data' => ['id' => $contentId]]);
-    $amqpMessageMock->shouldReceive('ack')->once(); // Expect ack to be called on success.
+    $amqpMessageMock->shouldReceive('ack')->once();
+    // SOLUCIÓN: Explicitar que los métodos de fallo NO deben llamarse.
+    $amqpMessageMock->shouldReceive('has')->with('application_headers')->times(0);
+    $amqpMessageMock->shouldReceive('nack')->times(0);
+
 
     // --- ACT ---
     $this->consumer->processMessage($amqpMessageMock, $this->channelMock);
@@ -143,7 +158,7 @@ test('mensaje es enviado a reintento (nack) en el primer fallo', function () {
     $amqpMessageMock->body = json_encode(['data' => ['id' => $contentId]]);
 
     // Expect the message to be checked for retry headers (and not have them)
-    $amqpMessageMock->shouldReceive('has')->with('application_headers')->andReturn(false);
+    $amqpMessageMock->shouldReceive('has')->with('application_headers')->once()->andReturn(false);
 
     // Expect the message to be rejected (nack) to be sent to the retry queue
     $amqpMessageMock->shouldReceive('nack')->once()->with(false);
@@ -166,22 +181,22 @@ test('mensaje es enviado a la DLQ final después de maximos reintentos', functio
 
     // Expect the message to be published to the final DLX
     $this->channelMock->shouldReceive('basic_publish')
-        ->once()->with(Mockery::any(), 'casiel_dlx', 'casiel.dlq.final');
+        ->once()->with(Mockery::type(AMQPMessage::class), 'casiel_dlx', 'casiel.dlq.final');
 
     $amqpMessageMock = Mockery::mock(AMQPMessage::class);
     $amqpMessageMock->body = json_encode(['data' => ['id' => $contentId]]);
 
     // Simulate a message that has already failed MAX_RETRIES times
     $mockHeaders = Mockery::mock(AMQPTable::class);
-    $mockHeaders->shouldReceive('getNativeData')->andReturn([
+    $mockHeaders->shouldReceive('getNativeData')->once()->andReturn([
         'x-death' => [
-            // The key is the 'count' which is based on MAX_RETRIES=3
-            ['count' => 3, 'queue' => getenv('RABBITMQ_WORK_QUEUE')]
+            // The 'count' from the work queue rejection is what matters.
+            ['count' => 3, 'queue' => getenv('RABBITMQ_WORK_QUEUE'), 'reason' => 'rejected']
         ]
     ]);
 
-    $amqpMessageMock->shouldReceive('has')->with('application_headers')->andReturn(true);
-    $amqpMessageMock->shouldReceive('get')->with('application_headers')->andReturn($mockHeaders);
+    $amqpMessageMock->shouldReceive('has')->with('application_headers')->once()->andReturn(true);
+    $amqpMessageMock->shouldReceive('get')->with('application_headers')->once()->andReturn($mockHeaders);
 
     // After publishing to the DLQ, the original message must be 'acked' to be removed
     $amqpMessageMock->shouldReceive('ack')->once();
