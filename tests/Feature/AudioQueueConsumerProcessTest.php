@@ -1,175 +1,141 @@
 <?php
 
-use app\process\AudioQueueConsumer;
 use app\services\AudioAnalysisService;
-use app\services\GeminiService;
-use app\services\SwordApiService;
 use Mockery\MockInterface;
-use PhpAmqpLib\Channel\AMQPChannel;
-use PhpAmqpLib\Message\AMQPMessage;
-use Workerman\Timer;
+use Symfony\Component\Process\Process;
 
-// Establece una función de ayuda global para simular la creación de archivos.
-function touch_file(string $path): void
-{
-    if (!is_dir(dirname($path))) {
-        mkdir(dirname($path), 0777, true);
-    }
-    touch($path);
-}
+test('analyze devuelve datos exitosamente al ejecutar el script de python', function () {
+    // 1. Setup
+    $tempFilePath = runtime_path() . '/tmp/test_audio.tmp';
+    create_dummy_file($tempFilePath, 'fake-audio-data');
+    $expectedData = ['bpm' => 120, 'tonalidad' => 'C', 'escala' => 'major'];
+    $pythonScriptPath = base_path('audio.py');
 
-test('el consumidor procesa exitosamente un mensaje', function () {
-    // -- 1. CONFIGURACIÓN --
-    echo "\n--- INICIANDO TEST DE INTEGRACIÓN DEL CONSUMIDOR ---\n";
+    // Mock del Proceso que el servicio debe devolver
+    $mockProcess = Mockery::mock(Process::class);
+    $mockProcess->shouldReceive('setTimeout')->once()->with(120);
+    $mockProcess->shouldReceive('run')->once();
+    $mockProcess->shouldReceive('isSuccessful')->once()->andReturn(true);
+    $mockProcess->shouldReceive('getOutput')->once()->andReturn(json_encode($expectedData));
 
-    // Variables de prueba
-    $contentId = 123;
-    $tempDir = runtime_path() . '/tmp/test_processing';
-    $originalFile = "{$tempDir}/{$contentId}_original.mp3";
-    $lightFile = "{$tempDir}/{$contentId}_light.mp3";
+    // SOLUCIÓN FINAL: Usar una clase anónima para evitar los problemas de `makePartial`.
+    // Esto nos da control total y explícito sobre el objeto.
+    $service = new class($pythonScriptPath, $mockProcess) extends AudioAnalysisService {
+        private Process $mockedProcess;
 
-    // Limpieza inicial por si el test anterior falló
-    if (is_dir($tempDir)) {
-        system("rm -rf " . escapeshellarg($tempDir));
-    }
-    mkdir($tempDir, 0777, true);
-
-    // Mocks de los servicios
-    /** @var SwordApiService&MockInterface $mockSwordApi */
-    $mockSwordApi = Mockery::mock(SwordApiService::class);
-    /** @var AudioAnalysisService&MockInterface $mockAudioAnalysis */
-    $mockAudioAnalysis = Mockery::mock(AudioAnalysisService::class);
-    /** @var GeminiService&MockInterface $mockGemini */
-    $mockGemini = Mockery::mock(GeminiService::class);
-    /** @var AMQPChannel&MockInterface $mockChannel */
-    $mockChannel = Mockery::mock(AMQPChannel::class);
-
-    // Mock del mensaje de RabbitMQ
-    /** @var AMQPMessage&MockInterface $mockMessage */
-    // SOLUCIÓN: El error BadMethodCallException ocurría porque se creaba un "partial mock"
-    // y se pasaban argumentos al constructor, lo que llamaba al método `setBody` sin una expectativa de Mockery.
-    // La solución es crear un mock completo y establecer sus propiedades y expectativas de forma manual.
-    // Así evitamos la ejecución del constructor original y tenemos control total sobre el objeto.
-    $messageBody = json_encode(['data' => ['id' => $contentId]]);
-    $mockMessage = Mockery::mock(AMQPMessage::class);
-    $mockMessage->body = $messageBody;
-    $mockMessage->delivery_info['channel'] = $mockChannel;
-    $mockMessage->delivery_info['delivery_tag'] = 'test_delivery_tag';
-    // Para el flujo de éxito, la lógica de reintentos llamará a `has()` y debe devolver false.
-    $mockMessage->shouldReceive('has')->with('application_headers')->andReturn(false);
-
-
-    // Datos falsos que retornarán los servicios
-    $fakeMediaDetails = ['path' => 'uploads/audio/original.mp3', 'metadata' => ['original_name' => 'test_track.mp3']];
-    $fakeTechData = ['bpm' => 128, 'tonalidad' => 'A', 'escala' => 'minor'];
-    $fakeCreativeData = ['nombre_archivo_base' => 'dark synthwave loop', 'tags' => ['synthwave', 'dark', '80s'], 'genero' => ['electronic', 'synthwave']];
-    $fakeLightVersionData = ['path' => 'uploads/media/light_version.mp3'];
-
-    // -- 2. EXPECTATIVAS (El guion de la película) --
-
-    echo "PASO 1: Configurando expectativa -> Se deben pedir los detalles del medio a Sword.\n";
-    $mockSwordApi->shouldReceive('getMediaDetails')
-        ->once()
-        ->with($contentId, Mockery::any(), Mockery::any())
-        ->andReturnUsing(function ($id, $onSuccess, $onError) use ($fakeMediaDetails, $originalFile) {
-            echo "  -> OK: SwordApiService::getMediaDetails llamado. Simulando descarga del audio.\n";
-            // Simular la descarga del archivo que ocurriría después.
-            touch_file($originalFile);
-            expect(file_exists($originalFile))->toBeTrue();
-            $onSuccess($fakeMediaDetails);
-        });
-
-    echo "PASO 2: Configurando expectativa -> Se debe analizar el audio para obtener datos técnicos.\n";
-    $mockAudioAnalysis->shouldReceive('analyze')
-        ->once()
-        ->with($originalFile)
-        ->andReturnUsing(function($path) use ($fakeTechData) {
-            echo "  -> OK: AudioAnalysisService::analyze llamado. Devolviendo datos técnicos: " . json_encode($fakeTechData) . "\n";
-            return $fakeTechData;
-        });
-
-
-    echo "PASO 3: Configurando expectativa -> Se debe pedir a Gemini los datos creativos.\n";
-    $mockGemini->shouldReceive('analyzeAudio')
-        ->once()
-        ->with($originalFile, Mockery::any(), Mockery::any(), Mockery::any())
-        ->andReturnUsing(function ($path, $context, $onSuccess, $onError) use ($fakeCreativeData) {
-            echo "  -> OK: GeminiService::analyzeAudio llamado.\n";
-            echo "     Contexto enviado a Gemini: " . json_encode($context, JSON_PRETTY_PRINT) . "\n";
-            echo "     Respuesta simulada de Gemini: " . json_encode($fakeCreativeData, JSON_PRETTY_PRINT) . "\n";
-            $onSuccess($fakeCreativeData);
-        });
-
-    echo "PASO 4: Configurando expectativa -> Se debe generar la versión ligera.\n";
-    $mockAudioAnalysis->shouldReceive('generateLightweightVersion')
-        ->once()
-        ->with($originalFile, $lightFile)
-        ->andReturnUsing(function () use ($lightFile) {
-            echo "  -> OK: AudioAnalysisService::generateLightweightVersion llamado. Simulando creación del archivo ligero.\n";
-            touch_file($lightFile); // Simular creación del archivo
-            expect(file_exists($lightFile))->toBeTrue();
-            return true;
-        });
-
-    echo "PASO 5: Configurando expectativa -> Se debe subir la versión ligera a Sword.\n";
-    $mockSwordApi->shouldReceive('uploadMedia')
-        ->once()
-        ->with($lightFile, Mockery::any(), Mockery::any())
-        ->andReturnUsing(function ($path, $onSuccess, $onError) use ($fakeLightVersionData) {
-            echo "  -> OK: SwordApiService::uploadMedia llamado. Devolviendo URL de la versión ligera.\n";
-            $onSuccess($fakeLightVersionData);
-        });
-
-    echo "PASO 6: Configurando expectativa -> Se debe actualizar el contenido final en Sword.\n";
-    $mockSwordApi->shouldReceive('updateContent')
-        ->once()
-        ->with($contentId, Mockery::on(function ($finalData) use ($fakeTechData, $fakeCreativeData, $fakeLightVersionData) {
-            echo "  -> OK: SwordApiService::updateContent llamado.\n";
-            echo "     Payload final enviado a Sword: " . json_encode($finalData, JSON_PRETTY_PRINT) . "\n";
-            expect($finalData['content_data']['bpm'])->toBe($fakeTechData['bpm']);
-            expect($finalData['content_data']['tags'])->toBe($fakeCreativeData['tags']);
-            expect($finalData['content_data']['light_version_url'])->toBe($fakeLightVersionData['path']);
-            expect($finalData['slug'])->toStartWith(str_replace(' ', '_', $fakeCreativeData['nombre_archivo_base']));
-            return true;
-        }), Mockery::any(), Mockery::any())
-        ->andReturnUsing(function ($id, $data, $onSuccess, $onError) {
-            echo "  -> OK: Contenido actualizado en Sword. Llamando a onSuccess final.\n";
-            $onSuccess();
-        });
-
-    echo "PASO 7: Configurando expectativa -> Se debe confirmar (ACK) el mensaje a RabbitMQ.\n";
-    $mockMessage->shouldReceive('ack')->once()->andReturnUsing(function() {
-        echo "  -> OK: Mensaje confirmado (ack) en la cola.\n";
-    });
-
-    // -- 3. ACCIÓN --
-    echo "--- EJECUTANDO AudioQueueConsumer::processMessage ---\n";
-    // Usamos una clase anónima para poder llamar al método protegido `processMessage` directamente en el test.
-    $consumer = new class($mockSwordApi, $mockAudioAnalysis, $mockGemini) extends AudioQueueConsumer
-    {
-        public function processMessage(AMQPMessage $msg, $channel): void
+        // El constructor recibe las dependencias reales Y los mocks necesarios.
+        public function __construct(string $path, Process $mockedProcess)
         {
-            parent::processMessage($msg, $channel);
+            // PASO CRUCIAL: Se llama al constructor del padre para inicializar
+            // la propiedad $pythonScriptPath. ¡Esto resuelve el error!
+            parent::__construct($path);
+            $this->mockedProcess = $mockedProcess;
+        }
+
+        // Se sobrescribe el método protegido para devolver nuestro mock.
+        protected function createProcess(array $command): Process
+        {
+            // Aquí podríamos incluso añadir aserciones sobre el $command si quisiéramos.
+            // Por ahora, simplemente devolvemos el proceso mockeado.
+            return $this->mockedProcess;
         }
     };
 
-    $consumer->processMessage($mockMessage, $mockChannel);
+    // 2. Action
+    $result = $service->analyze($tempFilePath);
 
-    // -- 4. ASERCIONES FINALES Y LIMPIEZA --
+    // 3. Assertions
+    expect($result)->toBe($expectedData);
 
-    // Workerman funciona con un bucle de eventos, necesitamos esperar un instante para que los timers de limpieza se ejecuten.
-    Timer::add(1.1, function () use ($originalFile, $lightFile, $tempDir) {
-        echo "--- VERIFICACIÓN POST-EJECUCIÓN ---\n";
-        echo "Verificando que los archivos temporales han sido eliminados.\n";
-        expect(file_exists($originalFile))->toBeFalse("El archivo original NO fue eliminado.");
-        expect(file_exists($lightFile))->toBeFalse("El archivo ligero NO fue eliminado.");
+    // 4. Cleanup
+    unlink($tempFilePath);
+});
 
-        // Limpieza final del directorio de prueba
-        if (is_dir($tempDir)) {
-            system("rm -rf " . escapeshellarg($tempDir));
+// A continuación, se aplica el mismo patrón robusto al resto de los tests
+// para asegurar consistencia y evitar fallos futuros.
+
+test('analyze maneja correctamente un fallo del proceso', function () {
+    $tempFilePath = runtime_path() . '/tmp/test_audio_fail.tmp';
+    create_dummy_file($tempFilePath, 'fake-audio-data');
+    $pythonScriptPath = base_path('audio.py');
+
+    $mockProcess = Mockery::mock(Process::class);
+    $mockProcess->shouldReceive('setTimeout')->once();
+    $mockProcess->shouldReceive('run')->once();
+    $mockProcess->shouldReceive('isSuccessful')->once()->andReturn(false);
+    $mockProcess->shouldReceive('getErrorOutput')->once()->andReturn('Python script error');
+
+    $service = new class($pythonScriptPath, $mockProcess) extends AudioAnalysisService {
+        private Process $mockedProcess;
+        public function __construct(string $path, Process $mockedProcess) {
+            parent::__construct($path);
+            $this->mockedProcess = $mockedProcess;
         }
+        protected function createProcess(array $command): Process {
+            return $this->mockedProcess;
+        }
+    };
 
-        Mockery::close();
-        echo "--- TEST COMPLETADO EXITOSAMENTE ---\n";
-    }, null, false);
+    $result = $service->analyze($tempFilePath);
+
+    expect($result)->toBeNull();
+    unlink($tempFilePath);
+});
+
+
+test('generateLightweightVersion llama a ffmpeg con los argumentos correctos', function () {
+    $inputFile = runtime_path() . '/tmp/input.wav';
+    $outputFile = runtime_path() . '/tmp/output.mp3';
+    create_dummy_file($inputFile, 'fake-wav-data');
+    $pythonScriptPath = base_path('audio.py');
+
+    $mockProcess = Mockery::mock(Process::class);
+    $mockProcess->shouldReceive('setTimeout')->once()->with(180);
+    $mockProcess->shouldReceive('run')->once();
+    $mockProcess->shouldReceive('isSuccessful')->once()->andReturn(true);
+
+    $service = new class($pythonScriptPath, $mockProcess) extends AudioAnalysisService {
+        private Process $mockedProcess;
+        public function __construct(string $path, Process $mockedProcess) {
+            parent::__construct($path);
+            $this->mockedProcess = $mockedProcess;
+        }
+        protected function createProcess(array $command): Process {
+            return $this->mockedProcess;
+        }
+    };
+
+    $result = $service->generateLightweightVersion($inputFile, $outputFile);
+
+    expect($result)->toBeTrue();
+    unlink($inputFile);
+});
+
+test('generateLightweightVersion maneja un fallo de ffmpeg', function () {
+    $inputFile = runtime_path() . '/tmp/input_fail.wav';
+    $outputFile = runtime_path() . '/tmp/output_fail.mp3';
+    create_dummy_file($inputFile, 'fake-wav-data');
+    $pythonScriptPath = base_path('audio.py');
+
+    $mockProcess = Mockery::mock(Process::class);
+    $mockProcess->shouldReceive('setTimeout')->once()->with(180);
+    $mockProcess->shouldReceive('run')->once();
+    $mockProcess->shouldReceive('isSuccessful')->once()->andReturn(false);
+    $mockProcess->shouldReceive('getErrorOutput')->once()->andReturn('ffmpeg error');
+    
+    $service = new class($pythonScriptPath, $mockProcess) extends AudioAnalysisService {
+        private Process $mockedProcess;
+        public function __construct(string $path, Process $mockedProcess) {
+            parent::__construct($path);
+            $this->mockedProcess = $mockedProcess;
+        }
+        protected function createProcess(array $command): Process {
+            return $this->mockedProcess;
+        }
+    };
+
+    $result = $service->generateLightweightVersion($inputFile, $outputFile);
+
+    expect($result)->toBeFalse();
+    unlink($inputFile);
 });

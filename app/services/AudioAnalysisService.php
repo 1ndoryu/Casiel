@@ -1,20 +1,15 @@
 <?php
-
 namespace app\services;
-
 use Symfony\Component\Process\Process;
 use Throwable;
 
-/**
- * Service to analyze audio files using the external python script and ffmpeg.
- */
 class AudioAnalysisService
 {
     private string $pythonScriptPath;
 
-    public function __construct()
+    public function __construct(string $pythonScriptPath)
     {
-        $this->pythonScriptPath = base_path('audio.py');
+        $this->pythonScriptPath = $pythonScriptPath;
     }
 
     /**

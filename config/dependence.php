@@ -13,8 +13,10 @@ return [
         // Inject the http client to make the service testable
         return new SwordApiService(new HttpClient());
     },
+    // SOLUCIÓN: Actualizar la definición en el contenedor de dependencias
+    // para que coincida con el nuevo constructor que requiere una ruta.
     AudioAnalysisService::class => function () {
-        return new AudioAnalysisService();
+        return new AudioAnalysisService(base_path('audio.py'));
     },
     GeminiService::class => function () {
         // This service now requires an HttpClient for testability

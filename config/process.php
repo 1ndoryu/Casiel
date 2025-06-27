@@ -58,11 +58,9 @@ return [
     // RabbitMQ consumer process
     'audio_queue_consumer' => [
         'handler' => AudioQueueConsumer::class,
-        // SOLUCIÓN DEFINITIVA: Instanciamos manualmente las dependencias aquí.
-        // Esto evita cualquier problema con la carga de configuración o el contenedor de DI.
         'constructor' => [
             'swordApiService' => new SwordApiService(new HttpClient()),
-            'audioAnalysisService' => new AudioAnalysisService(),
+            'audioAnalysisService' => new AudioAnalysisService(base_path('audio.py')), // Correcto
             'geminiService' => new GeminiService(new HttpClient())
         ]
     ]

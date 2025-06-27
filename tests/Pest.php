@@ -45,7 +45,42 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+/**
+ * Recursively deletes a directory.
+ * This is a cross-platform replacement for `rm -rf`.
+ *
+ * @param string $dirPath
+ * @return void
+ */
+function delete_directory_recursively(string $dirPath): void
 {
-    // ..
+    if (!is_dir($dirPath)) {
+        return;
+    }
+    $files = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dirPath, RecursiveDirectoryIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+
+    foreach ($files as $fileinfo) {
+        $todo = ($fileinfo->isDir() ? 'rmdir' : 'unlink');
+        $todo($fileinfo->getRealPath());
+    }
+
+    rmdir($dirPath);
+}
+
+/**
+ * Helper to create a dummy file and its directory if it doesn't exist.
+ *
+ * @param string $path
+ * @param string $content
+ * @return void
+ */
+function create_dummy_file(string $path, string $content = 'dummy_content'): void
+{
+    if (!is_dir(dirname($path))) {
+        mkdir(dirname($path), 0777, true);
+    }
+    file_put_contents($path, $content);
 }
