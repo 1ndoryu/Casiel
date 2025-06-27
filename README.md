@@ -1,11 +1,3 @@
-# Proyecto: Casiel
-
-Casiel es un servicio de backend construido sobre Webman/Workerman. Su función principal es procesar audios. Recibe una notificación, descarga un audio, lo analiza para extraer metadatos técnicos (BPM, tonalidad), genera una versión ligera y utiliza la IA de Google Gemini para obtener metadatos creativos (tags, género, descripción, etc.). Sus responsabilidades clave son exclusivamente 3, actualizar la metadata de los contenidos con audio, actualizar el nombre del archivo y regresar una version ligera.
-
-Nota: Sword v2 se construye junto a Casiel, por lo que si sword requiere cambios, se puede indicar para aplicarlos, puede que requiera cambios Sword para adaptarse. Casiel no usa base de datos, ni almacena contenido, esa debe ser responsabilidad del cms. He adelantado un script llamado audio.py que hace algunas cositas, y un env con datos utiles. Tambien deje un ejemplo de como use gemini en un proyecto anterior.
-
-Otra nota: tiene que ser compatible con windows (estamos en windows), y con linux.
-
 ---
 
 ## Arquitectura

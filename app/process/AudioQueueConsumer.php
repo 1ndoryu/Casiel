@@ -22,17 +22,20 @@ class AudioQueueConsumer
     private SwordApiService $swordApiService;
     private AudioAnalysisService $audioAnalysisService;
     private GeminiService $geminiService;
-    private string $tempDir;
+    private Client $httpClient;
+    protected string $tempDir;
     private const MAX_RETRIES = 3;
 
     public function __construct(
         SwordApiService $swordApiService,
         AudioAnalysisService $audioAnalysisService,
-        GeminiService $geminiService
+        GeminiService $geminiService,
+        Client $httpClient // Injected dependency
     ) {
         $this->swordApiService = $swordApiService;
         $this->audioAnalysisService = $audioAnalysisService;
         $this->geminiService = $geminiService;
+        $this->httpClient = $httpClient; // Store client
     }
 
     public function onWorkerStart(Worker $worker)
@@ -88,7 +91,7 @@ class AudioQueueConsumer
 
         casiel_log('audio_processor', "Infraestructura de colas (trabajo, reintento, dlq) configurada exitosamente.");
     }
-    
+
     private function connectAndConsume(): void
     {
         try {
@@ -158,7 +161,7 @@ class AudioQueueConsumer
             if ($retryCount < self::MAX_RETRIES) {
                 casiel_log('audio_processor', "Fallo en procesamiento. Reintentando (" . ($retryCount + 1) . "/" . (self::MAX_RETRIES + 1) . ").", ['content_id' => $contentId]);
                 // Nack without requeue will send the message to the configured dead-letter exchange
-                $msg->nack(false); 
+                $msg->nack(false);
             } else {
                 casiel_log('audio_processor', "Fallo final después de " . ($retryCount + 1) . " intentos. Enviando a la cola de letras muertas.", ['content_id' => $contentId], 'error');
                 // Manually publish to the final DLQ and then ack the original message
@@ -178,7 +181,8 @@ class AudioQueueConsumer
             casiel_log('audio_processor', "Iniciando flujo asíncrono para contenido ID: {$contentId}");
 
             // STEP 1: Get media details from Sword
-            $this->swordApiService->getMediaDetails($contentId,
+            $this->swordApiService->getMediaDetails(
+                $contentId,
                 function ($mediaDetails) use ($contentId, $handleFailure, &$filesToDelete, $msg) {
                     $audioUrl = $mediaDetails['path'] ?? null;
                     $originalFilename = $mediaDetails['metadata']['original_name'] ?? 'audio.tmp';
@@ -194,8 +198,7 @@ class AudioQueueConsumer
                     casiel_log('audio_processor', "Paso 1 completado. URL de audio: {$fullAudioUrl}");
 
                     // STEP 2: Download the audio file
-                    $httpClient = new Client();
-                    $httpClient->get($fullAudioUrl, [], function ($response) use ($localPath, $contentId, $handleFailure, $originalFilename, &$filesToDelete, $msg) {
+                    $this->httpClient->get($fullAudioUrl, [], function ($response) use ($localPath, $contentId, $handleFailure, $originalFilename, &$filesToDelete, $msg) {
                         if ($response->getStatusCode() !== 200) {
                             $handleFailure("No se pudo descargar el archivo de audio. Status: " . $response->getStatusCode());
                             return;
@@ -213,7 +216,9 @@ class AudioQueueConsumer
 
                         // STEP 4: Get creative metadata from Gemini
                         $geminiContext = ['title' => pathinfo($originalFilename, PATHINFO_FILENAME), 'technical_metadata' => $techData];
-                        $this->geminiService->analyzeAudio($localPath, $geminiContext,
+                        $this->geminiService->analyzeAudio(
+                            $localPath,
+                            $geminiContext,
                             function ($creativeData) use ($techData, $contentId, $handleFailure, $localPath, &$filesToDelete, $msg) {
                                 if ($creativeData === null) {
                                     $handleFailure("Falló el análisis creativo con Gemini.");
@@ -231,7 +236,8 @@ class AudioQueueConsumer
                                 casiel_log('audio_processor', "Paso 5 completado. Versión ligera generada.");
 
                                 // STEP 6: Upload lightweight version
-                                $this->swordApiService->uploadMedia($lightweightPath,
+                                $this->swordApiService->uploadMedia(
+                                    $lightweightPath,
                                     function ($lightweightMediaData) use ($techData, $creativeData, $contentId, $handleFailure, $msg) {
                                         $lightweightUrl = $lightweightMediaData['path'] ?? null;
                                         if (!$lightweightUrl) {
@@ -248,7 +254,9 @@ class AudioQueueConsumer
                                             'slug' => str_replace(' ', '_', $newFileNameBase) . "_{$randomSuffix}"
                                         ];
 
-                                        $this->swordApiService->updateContent($contentId, $finalData,
+                                        $this->swordApiService->updateContent(
+                                            $contentId,
+                                            $finalData,
                                             function () use ($contentId, $msg) {
                                                 casiel_log('audio_processor', "Paso 7 completado. Contenido {$contentId} actualizado en Sword.");
                                                 casiel_log('audio_processor', "Procesamiento del ID {$contentId} completado exitosamente.");
@@ -272,16 +280,28 @@ class AudioQueueConsumer
             // Catch any synchronous errors that happen before the async chain starts
             $handleFailure("Excepción síncrona fatal en el flujo de procesamiento: " . $e->getMessage());
         } finally {
-            // This robust cleanup runs after the async chain has definitively finished (either by success ack or failure handling).
-            // We add a small timer to ensure any async file operations have completed on the event loop.
-            \Workerman\Timer::add(1, function() use ($filesToDelete) {
-                foreach ($filesToDelete as $file) {
-                    if (file_exists($file)) {
-                        unlink($file);
-                        casiel_log('audio_processor', "Archivo temporal de limpieza eliminado: " . basename($file));
-                    }
-                }
-            }, null, false);
+            $this->scheduleCleanup($filesToDelete);
         }
+    }
+
+    /**
+     * Schedules the cleanup of temporary files using a timer.
+     * This method is protected to allow overriding in test environments.
+     *
+     * @param array $filesToDelete
+     * @return void
+     */
+    protected function scheduleCleanup(array $filesToDelete): void
+    {
+        // This robust cleanup runs after the async chain has definitively finished (either by success ack or failure handling).
+        // We add a small timer to ensure any async file operations have completed on the event loop.
+        \Workerman\Timer::add(1, function () use ($filesToDelete) {
+            foreach ($filesToDelete as $file) {
+                if (file_exists($file)) {
+                    unlink($file);
+                    casiel_log('audio_processor', "Archivo temporal de limpieza eliminado: " . basename($file));
+                }
+            }
+        }, null, false);
     }
 }
