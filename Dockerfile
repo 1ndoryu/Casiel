@@ -24,8 +24,8 @@ WORKDIR /usr/src/app
 
 COPY . .
 
-RUN composer install --working-dir=./webman --no-dev --optimize-autoloader --prefer-dist
+RUN composer install --no-dev --optimize-autoloader --prefer-dist
 
 EXPOSE 8788
 
-CMD ["php", "webman/start.php", "start"]
+CMD ["php", "start.php", "start"]
