@@ -1,11 +1,13 @@
 <?php
 
 use app\services\GeminiService;
+use Mockery\MockInterface;
 use Workerman\Http\Client;
 use Workerman\Http\Response;
 
 test('analyzeAudio successfully gets creative metadata', function () {
     // 1. Setup
+    /** @var Client&MockInterface $mockHttpClient */
     $mockHttpClient = Mockery::mock(Client::class);
     $tempFilePath = runtime_path() . '/tmp/test_audio_gemini.mp3';
     file_put_contents($tempFilePath, 'fake-audio-data');
@@ -62,6 +64,7 @@ test('analyzeAudio successfully gets creative metadata', function () {
 
 test('analyzeAudio handles API error and calls onError', function () {
     // 1. Setup
+    /** @var Client&MockInterface $mockHttpClient */
     $mockHttpClient = Mockery::mock(Client::class);
     $tempFilePath = runtime_path() . '/tmp/test_audio_gemini_fail.mp3';
     file_put_contents($tempFilePath, 'fake-audio-data');

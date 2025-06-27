@@ -1,6 +1,7 @@
 <?php
 
 use app\services\AudioAnalysisService;
+use Mockery\MockInterface;
 use Symfony\Component\Process\Process;
 
 test('analyze successfully returns data from python script', function () {
@@ -10,6 +11,7 @@ test('analyze successfully returns data from python script', function () {
     $expectedData = ['bpm' => 120, 'tonalidad' => 'C', 'escala' => 'major'];
 
     // Mock the Process dependency
+    /** @var Process&MockInterface $mockProcess */
     $mockProcess = Mockery::mock(Process::class);
     $mockProcess->shouldReceive('setTimeout')->once()->with(120);
     $mockProcess->shouldReceive('run')->once();
@@ -45,6 +47,7 @@ test('analyze handles process failure', function () {
     $tempFilePath = runtime_path() . '/tmp/test_audio_analysis_fail.mp3';
     file_put_contents($tempFilePath, 'fake-audio-data');
 
+    /** @var Process&MockInterface $mockProcess */
     $mockProcess = Mockery::mock(Process::class);
     $mockProcess->shouldReceive('setTimeout')->once();
     $mockProcess->shouldReceive('run')->once();
@@ -79,6 +82,7 @@ test('generateLightweightVersion successfully calls ffmpeg', function () {
     $outputFile = runtime_path() . '/tmp/output.mp3';
     file_put_contents($inputFile, 'fake-wav-data');
 
+    /** @var Process&MockInterface $mockProcess */
     $mockProcess = Mockery::mock(Process::class);
     $mockProcess->shouldReceive('setTimeout')->once()->with(180);
     $mockProcess->shouldReceive('run')->once();
@@ -124,6 +128,7 @@ test('generateLightweightVersion handles ffmpeg failure', function () {
     $outputFile = runtime_path() . '/tmp/output.mp3';
     file_put_contents($inputFile, 'fake-wav-data');
 
+    /** @var Process&MockInterface $mockProcess */
     $mockProcess = Mockery::mock(Process::class);
     $mockProcess->shouldReceive('setTimeout')->once()->with(180);
     $mockProcess->shouldReceive('run')->once();

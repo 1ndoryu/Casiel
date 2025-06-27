@@ -1,11 +1,13 @@
 <?php
 
 use app\services\SwordApiService;
+use Mockery\MockInterface;
 use Workerman\Http\Client;
 use Workerman\Http\Response;
 
 test('uploadMedia successfully authenticates and uploads a file', function () {
     // 1. Setup: Create a mock HTTP client
+    /** @var Client&MockInterface $mockHttpClient */
     $mockHttpClient = Mockery::mock(Client::class);
 
     $apiUrl = getenv('SWORD_API_URL');
@@ -66,6 +68,7 @@ test('uploadMedia successfully authenticates and uploads a file', function () {
 
 test('getMediaDetails handles api error and calls onError', function () {
     // 1. Setup
+    /** @var Client&MockInterface $mockHttpClient */
     $mockHttpClient = Mockery::mock(Client::class);
     $apiUrl = getenv('SWORD_API_URL');
 
