@@ -45,7 +45,7 @@ class AudioQueueConsumer
             mkdir($this->tempDir, 0777, true);
         }
 
-        casiel_log('audio_processor', 'Iniciando consumidor de cola de audio...');
+        //casiel_log('audio_processor', 'Iniciando consumidor de cola de audio...');
         $this->connectAndConsume();
     }
 
@@ -55,41 +55,27 @@ class AudioQueueConsumer
         $dlx = 'casiel_dlx'; // Dead-Letter Exchange: Un "router" para mensajes fallidos.
         $retryDelay = 60000; // 1 minuto en milisegundos
 
-        // Declaramos los dos intercambios que gobernarán el flujo.
         $channel->exchange_declare($mainExchange, 'direct', false, true, false);
         $channel->exchange_declare($dlx, 'direct', false, true, false);
 
-        // COLA 1: Dead-Letter Queue Final (casiel_audio_dlq)
-        // Aquí es donde los mensajes van a "morir" después de fallar todos los reintentos.
         $finalDlq = 'casiel_audio_dlq';
         $channel->queue_declare($finalDlq, false, true, false, false);
-        $channel->queue_bind($finalDlq, $dlx, 'casiel.dlq.final'); // Se enlaza al DLX con una clave única.
+        $channel->queue_bind($finalDlq, $dlx, 'casiel.dlq.final');
 
-        // COLA 2: Cola de Espera para Reintentos (casiel_audio_retry_queue)
-        // Los mensajes fallidos esperan aquí un tiempo (TTL) antes de volver a procesarse.
         $retryQueue = 'casiel_audio_retry_queue';
         $channel->queue_declare($retryQueue, false, true, false, false, new AMQPTable([
-            // 'x-message-ttl': El mensaje solo puede vivir en esta cola por 60 segundos.
             'x-message-ttl' => $retryDelay,
-            // 'x-dead-letter-exchange': Cuando el TTL expira, el mensaje se envía a este intercambio.
             'x-dead-letter-exchange' => $mainExchange,
-            // 'x-dead-letter-routing-key': Y se envía con la clave de enrutamiento original para que vuelva a la cola de trabajo.
             'x-dead-letter-routing-key' => 'casiel.process'
         ]));
-        $channel->queue_bind($retryQueue, $dlx, 'casiel.dlq.retry'); // Se enlaza al DLX con su clave de reintento.
+        $channel->queue_bind($retryQueue, $dlx, 'casiel.dlq.retry');
 
-        // COLA 3: Cola de Trabajo Principal (definida en .env)
-        // El consumidor escucha aquí. Está configurada para usar el DLX en caso de fallo.
         $workQueue = getenv('RABBITMQ_WORK_QUEUE');
         $channel->queue_declare($workQueue, false, true, false, false, new AMQPTable([
-            // 'x-dead-letter-exchange': Si un mensaje es rechazado (nack), se envía al DLX.
             'x-dead-letter-exchange' => $dlx,
-            // 'x-dead-letter-routing-key': Y se envía con la clave de reintento para que vaya a la cola de espera.
             'x-dead-letter-routing-key' => 'casiel.dlq.retry'
         ]));
-        $channel->queue_bind($workQueue, $mainExchange, 'casiel.process'); // Se enlaza al intercambio principal.
-
-        casiel_log('audio_processor', "Infraestructura de colas (trabajo, reintento, dlq) configurada exitosamente.");
+        $channel->queue_bind($workQueue, $mainExchange, 'casiel.process');
     }
 
     private function connectAndConsume(): void
@@ -106,7 +92,6 @@ class AudioQueueConsumer
             $this->setupQueues($channel);
 
             $queueName = getenv('RABBITMQ_WORK_QUEUE');
-            casiel_log('audio_processor', "Escuchando en la cola: '{$queueName}'");
 
             $callback = function (AMQPMessage $msg) use ($channel) {
                 casiel_log('audio_processor', "Mensaje recibido de la cola.", ['body' => $msg->body]);
@@ -122,16 +107,27 @@ class AudioQueueConsumer
             $channel->close();
             $connection->close();
         } catch (AMQPProtocolChannelException $e) {
-            casiel_log('audio_processor', 'Error de protocolo con RabbitMQ. Puede que las colas ya existan con otras propiedades. Revisa la configuración.', ['error' => $e->getMessage()], 'error');
             sleep(30);
             $this->connectAndConsume();
         } catch (Throwable $e) {
-            casiel_log('audio_processor', 'No se pudo conectar o consumir de RabbitMQ. Reintentando en 10s.', [
-                'error' => $e->getMessage(),
-            ], 'error');
             sleep(10);
             $this->connectAndConsume();
         }
+    }
+
+    /**
+     * Extracts the native array of application headers from the message.
+     * Protected to allow mocking in tests by overriding it.
+     *
+     * @param AMQPMessage $msg
+     * @return array|null
+     */
+    protected function getMessageHeaders(AMQPMessage $msg): ?array
+    {
+        if (!$msg->has('application_headers')) {
+            return null;
+        }
+        return $msg->get('application_headers')->getNativeData();
     }
 
     public function processMessage(AMQPMessage $msg, $channel): void
@@ -140,31 +136,26 @@ class AudioQueueConsumer
         $contentId = $payload['data']['id'] ?? null;
         $filesToDelete = [];
 
-        // Define a general failure handler to avoid repetition
         $handleFailure = function (string $errorMessage) use ($msg, $contentId, $channel) {
             casiel_log('audio_processor', "Error procesando ID {$contentId}: {$errorMessage}", [], 'error');
 
             $retryCount = 0;
-            if ($msg->has('application_headers')) {
-                $headers = $msg->get('application_headers')->getNativeData();
-                // Check 'x-death' header to count how many times the message has been dead-lettered
-                if (isset($headers['x-death'])) {
-                    foreach ($headers['x-death'] as $death) {
-                        if ($death['queue'] === getenv('RABBITMQ_WORK_QUEUE')) {
-                            $retryCount = $death['count'];
-                            break;
-                        }
+            $headers = $this->getMessageHeaders($msg); // Use the new helper method
+
+            if (isset($headers['x-death'])) {
+                foreach ($headers['x-death'] as $death) {
+                    if ($death['queue'] === getenv('RABBITMQ_WORK_QUEUE')) {
+                        $retryCount = $death['count'];
+                        break;
                     }
                 }
             }
 
             if ($retryCount < self::MAX_RETRIES) {
                 casiel_log('audio_processor', "Fallo en procesamiento. Reintentando (" . ($retryCount + 1) . "/" . (self::MAX_RETRIES + 1) . ").", ['content_id' => $contentId]);
-                // Nack without requeue will send the message to the configured dead-letter exchange
                 $msg->nack(false);
             } else {
                 casiel_log('audio_processor', "Fallo final después de " . ($retryCount + 1) . " intentos. Enviando a la cola de letras muertas.", ['content_id' => $contentId], 'error');
-                // Manually publish to the final DLQ and then ack the original message
                 $channel->basic_publish($msg, 'casiel_dlx', 'casiel.dlq.final');
                 $msg->ack();
             }
@@ -172,6 +163,7 @@ class AudioQueueConsumer
 
         if (json_last_error() !== JSON_ERROR_NONE || !$contentId) {
             casiel_log('audio_processor', 'Mensaje inválido o sin ID de contenido. Descartando permanentemente.', ['body' => $msg->body], 'error');
+            // This path is for fundamentally broken messages, send straight to final DLQ
             $channel->basic_publish($msg, 'casiel_dlx', 'casiel.dlq.final');
             $msg->ack();
             return;
@@ -277,24 +269,14 @@ class AudioQueueConsumer
                 $handleFailure
             );
         } catch (Throwable $e) {
-            // Catch any synchronous errors that happen before the async chain starts
             $handleFailure("Excepción síncrona fatal en el flujo de procesamiento: " . $e->getMessage());
         } finally {
             $this->scheduleCleanup($filesToDelete);
         }
     }
 
-    /**
-     * Schedules the cleanup of temporary files using a timer.
-     * This method is protected to allow overriding in test environments.
-     *
-     * @param array $filesToDelete
-     * @return void
-     */
     protected function scheduleCleanup(array $filesToDelete): void
     {
-        // This robust cleanup runs after the async chain has definitively finished (either by success ack or failure handling).
-        // We add a small timer to ensure any async file operations have completed on the event loop.
         \Workerman\Timer::add(1, function () use ($filesToDelete) {
             foreach ($filesToDelete as $file) {
                 if (file_exists($file)) {
