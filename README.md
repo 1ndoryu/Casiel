@@ -1,49 +1,131 @@
----
+# 🎶 Casiel: The AI-Powered Audio Co-Pilot
 
-## Arquitectura
+[](https://php.net)
+[](https://www.workerman.net)
+[](https://www.google.com/search?q=LICENSE)
 
-El sistema funciona de forma asíncrona y está diseñado para ser robusto y escalable.
+Welcome to **Casiel**, your intelligent backend service designed to automatically analyze, enrich, and process your audio files. Think of Casiel as an automated studio assistant that works 24/7 to make your audio content smarter and more accessible.
 
-1.  **Recepción del Trabajo**: Un cliente (como Sword CMS) publica un mensaje en una cola de **RabbitMQ** cuando un nuevo audio necesita ser procesado. El mensaje contiene el ID del contenido a procesar.
-2.  **Consumo del Mensaje**: El proceso `AudioQueueConsumer` de Casiel, que corre de forma continua, recoge el mensaje de la cola.
-3.  **Orquestación de Servicios**: El consumidor orquesta una serie de llamadas a diferentes servicios de forma secuencial y asíncrona:
-    -   **`SwordApiService`**: Se conecta al CMS para obtener la URL del archivo de audio original.
-    -   **Descarga**: Descarga el archivo de audio a un directorio temporal local.
-    -   **`AudioAnalysisService`**: Ejecuta un script de Python (`audio.py`) que usa `librosa` para extraer metadatos técnicos como BPM y tonalidad.
-    -   **`GeminiService`**: Envía el audio a la API de Google Gemini para obtener metadatos creativos (género, tags, descripción, un nombre de archivo sugerido, etc.).
-    -   **Generación de Versión Ligera**: `AudioAnalysisService` utiliza `ffmpeg` para crear una versión del audio en MP3 a 96kbps.
-    -   **Subida y Actualización**: `SwordApiService` sube la nueva versión ligera al CMS y luego actualiza el registro original del contenido con toda la metadata (técnica y creativa) y el nuevo nombre/slug.
-4.  **Manejo de Fallos**: Si cualquier paso falla, el sistema utiliza una estrategia de reintentos con una cola de espera en RabbitMQ. Si el mensaje falla repetidamente, se mueve a una "Dead-Letter Queue" final para inspección manual.
-5.  **Limpieza**: Al finalizar el proceso (ya sea con éxito o fallo), todos los archivos temporales creados localmente son eliminados.
+Casiel listens for new audio uploads, downloads them, and uses a combination of technical analysis and cutting-edge AI to generate a rich set of metadata. It then seamlessly integrates this information back into your primary system or CMS, saving you countless hours of manual work.
 
-Para una explicación detallada de la estrategia de RabbitMQ, consulta el archivo `docs/rabbitmq_setup.md`.
+## ✨ Key Features
 
-## Dependencias Externas
+  * **⚙️ Fully Automated Workflow:** A "fire-and-forget" system. Once a new audio file is flagged, Casiel handles the entire process from start to finish.
+  * **🎼 Technical Metadata Extraction:** Automatically detects crucial audio properties like **BPM (Beats Per Minute)** and **musical key/scale** using the powerful `librosa` library.
+  * **🤖 AI-Powered Creative Analysis:** Leverages the **Google Gemini AI** to generate insightful and creative metadata, including:
+      * Descriptive tags (e.g., "melodic", "dark", "808")
+      * Musical genres (e.g., "Hip Hop", "Electronic")
+      * Evoked emotions (e.g., "energetic", "sad", "chill")
+      * Instrument detection
+      * Artist "vibes"
+      * SEO-friendly descriptions and titles.
+  * **🚀 Lightweight Version Generation:** Creates a web-friendly, low-bitrate (96kbps) MP3 preview of the original audio, perfect for fast-loading players.
+  * **🔗 Seamless CMS Integration:** Designed to be agnostic and connect with any content management system (currently configured for **Sword v2**). It updates content with the new metadata and can even suggest a better, more descriptive filename.
+  * **🪟 Cross-Platform:** Built to run consistently on both **Windows** for development and **Linux** for production.
 
-Para que Casiel funcione correctamente, el entorno (ya sea local o en un contenedor Docker) debe tener las siguientes dependencias instaladas y accesibles en el PATH del sistema:
+## ⚙️ How It Works: A High-Level Look
 
--   **`php`**: Versión 8.1 o superior.
--   **`composer`**: Para gestionar las dependencias de PHP.
--   **`python3`**: Para ejecutar el script de análisis de audio.
--   **`pip3`**: Para instalar las dependencias de Python (`librosa`, `numpy`).
--   **`ffmpeg`**: Herramienta esencial para la manipulación de audio, usada para generar la versión ligera.
+Casiel operates as a robust, asynchronous pipeline. The journey of an audio file looks like this:
 
-## Variables de Entorno
+1.  **Event Trigger** ➡️ A message is sent to a **🐰 RabbitMQ** queue, telling Casiel that a new audio file is ready for processing.
+2.  **Job Received** ➡️ Casiel's consumer process picks up the job from the queue.
+3.  **Download** 📥 ➡️ Casiel fetches the original audio file from its source URL.
+4.  **Technical Analysis** 🎼 ➡️ A Python script is executed to extract technical data (BPM, key).
+5.  **Creative Analysis** 🧠 ➡️ The audio is sent to the **Google Gemini API** for deep, creative metadata generation.
+6.  **Optimization** 🎧 ➡️ **FFmpeg** is used to create a lightweight MP3 preview of the audio.
+7.  **Integration** 💾 ➡️ Casiel communicates with the CMS API to:
+      * Upload the new lightweight version.
+      * Update the original content entry with all the new metadata.
+      * Rename the file/slug to something more descriptive.
+8.  **Completion** ✅ ➡️ Temporary files are cleaned up, and the job is marked as complete.
 
-El sistema se configura a través del archivo `.env`. A continuación se describen las variables clave:
+If any step fails, the system automatically attempts to retry the job before setting it aside for manual review.
 
-| Variable              | Descripción                                                            | Ejemplo               |
-| --------------------- | ---------------------------------------------------------------------- | --------------------- |
-| `RABBITMQ_HOST`       | Host del servidor RabbitMQ.                                            | `localhost`           |
-| `RABBITMQ_PORT`       | Puerto del servidor RabbitMQ.                                          | `5672`                |
-| `RABBITMQ_USER`       | Usuario para la conexión con RabbitMQ.                                 | `user`                |
-| `RABBITMQ_PASS`       | Contraseña para la conexión con RabbitMQ.                              | `password`            |
-| `RABBITMQ_VHOST`      | Virtual Host a utilizar en RabbitMQ.                                   | `/`                   |
-| `RABBITMQ_WORK_QUEUE` | Nombre de la cola de la que Casiel consumirá los trabajos.             | `kamples_queue`       |
-| `SWORD_API_URL`       | URL base de la API del CMS Sword.                                      | `http://swordphp.com` |
-| `SWORD_API_USER`      | Usuario para autenticarse en la API de Sword.                          | `wan`                 |
-| `SWORD_API_PASSWORD`  | Contraseña para la API de Sword.                                       | `uFpHLR9FXqVCFy9`     |
-| `GEMINI_API_KEY`      | Tu clave de API para Google Gemini.                                    | `AIzaSy...`           |
-| `GEMINI_MODEL_ID`     | El modelo específico de Gemini a utilizar (compatible con audio).      | `gemini-1.5-flash`    |
-| `LOG_LEVEL`           | Nivel mínimo de logs a registrar (debug, info, warning, error).        | `debug`               |
-| `LOG_MAX_FILES`       | Número máximo de archivos de log a rotar antes de borrar los antiguos. | `15`                  |
+## 🛠️ Technology Stack
+
+Casiel is built with modern, high-performance tools:
+
+| Technology | Icon | Purpose |
+| :--- | :-: | :--- |
+| **PHP 8.2+ (Workerman)** |  | Core application logic, running on a high-concurrency socket server. |
+| **RabbitMQ** |  | Asynchronous message queuing to manage processing jobs. |
+| **Python** |  | Running `librosa` and `numpy` for technical audio analysis. |
+| **Google Gemini** |  | State-of-the-art AI for creative metadata generation. |
+| **FFmpeg** |  | The industry standard for audio/video conversion and processing. |
+| **Docker** |  | For containerized, reproducible deployments. |
+
+## 🚀 Getting Started
+
+To get Casiel up and running, you'll need the following prerequisites installed on your system.
+
+### **Prerequisites**
+
+  * PHP 8.1+
+  * Composer
+  * Python 3.x with Pip
+  * FFmpeg (must be accessible from your system's PATH)
+  * Git
+
+### **Installation**
+
+1.  **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/1ndoryu/Casiel
+    cd casiel
+    ```
+
+2.  **Install PHP dependencies:**
+
+    ```bash
+    composer install
+    ```
+
+3.  **Install Python dependencies:**
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+4.  **Configure your environment:**
+
+      * Copy the example environment file: `cp .env.example .env`
+      * Edit the `.env` file with your credentials for **RabbitMQ**, **Sword API**, and **Google Gemini AI**.
+
+5.  **Start the server:**
+
+      * **On Linux/Mac:**
+        ```bash
+        php start.php start
+        ```
+      * **On Windows:**
+        ```bash
+        # Simply double-click the `windows.bat` file or run it from your terminal.
+        windows.bat
+        ```
+
+    Casiel's internal processes, including the RabbitMQ consumer, will now be running in the background.
+
+## 🔧 Configuration
+
+All system configuration is handled through the `.env` file. Here are the most important variables you'll need to set:
+
+| Variable | Description |
+| :--- | :--- |
+| `RABBITMQ_*` | Connection details for your RabbitMQ server. |
+| `SWORD_API_URL` | The base URL for your content management system's API. |
+| `SWORD_API_USER` | The username for authenticating with the Sword API. |
+| `SWORD_API_PASSWORD` | The password for the Sword API user. |
+| `GEMINI_API_KEY` | Your API key for the Google Gemini service. |
+| `PYTHON_COMMAND` | The command to execute Python (`python` on Windows, `python3` on Linux). |
+| `FFMPEG_PATH` | The full path to the `ffmpeg` executable. Defaults to `ffmpeg`, but on Windows you might need `C:\\ffmpeg\\bin\\ffmpeg.exe`. |
+
+## ❤️ Contributing
+
+We believe in the power of community\! If you've found a bug, have an idea for a new feature, or want to improve the project, please feel free to:
+
+  * Open an issue on GitHub to report bugs or suggest features.
+  * Fork the repository and submit a pull request with your changes.
+
+Let's make audio processing simpler and smarter, together\!
+

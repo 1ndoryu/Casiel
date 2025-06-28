@@ -13,11 +13,12 @@ return [
         // Inject the http client to make the service testable
         return new SwordApiService(new HttpClient());
     },
-    
-    // SOLUTION: Update the service definition to inject the python command from .env
+
+    // SOLUTION: Update the service definition to inject the python and ffmpeg commands from .env
     AudioAnalysisService::class => function () {
         $pythonCommand = getenv('PYTHON_COMMAND') ?: 'python3'; // Fallback to 'python3' for Linux/Mac
-        return new AudioAnalysisService($pythonCommand, base_path('audio.py'));
+        $ffmpegPath = getenv('FFMPEG_PATH') ?: 'ffmpeg'; // Fallback to 'ffmpeg'
+        return new AudioAnalysisService($pythonCommand, base_path('audio.py'), $ffmpegPath);
     },
 
     GeminiService::class => function () {

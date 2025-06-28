@@ -65,8 +65,12 @@ return [
             'rabbitMqService' => new RabbitMqService(),
             'audioProcessingService' => new AudioProcessingService(
                 new SwordApiService(new HttpClient()),
-                // SOLUTION: Inject the python command here as well.
-                new AudioAnalysisService(getenv('PYTHON_COMMAND') ?: 'python3', base_path('audio.py')),
+                // SOLUTION: Inject the python and ffmpeg commands here as well.
+                new AudioAnalysisService(
+                    getenv('PYTHON_COMMAND') ?: 'python3',
+                    base_path('audio.py'),
+                    getenv('FFMPEG_PATH') ?: 'ffmpeg'
+                ),
                 new GeminiService(new HttpClient())
             ),
         ]

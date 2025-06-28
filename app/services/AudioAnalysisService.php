@@ -1,5 +1,7 @@
 <?php
+
 namespace app\services;
+
 use Symfony\Component\Process\Process;
 use Throwable;
 
@@ -7,11 +9,13 @@ class AudioAnalysisService
 {
     private string $pythonCommand;
     private string $pythonScriptPath;
+    private string $ffmpegPath;
 
-    public function __construct(string $pythonCommand, string $pythonScriptPath)
+    public function __construct(string $pythonCommand, string $pythonScriptPath, string $ffmpegPath)
     {
         $this->pythonCommand = $pythonCommand;
         $this->pythonScriptPath = $pythonScriptPath;
+        $this->ffmpegPath = $ffmpegPath;
     }
 
     /**
@@ -87,9 +91,9 @@ class AudioAnalysisService
         casiel_log('audio_processor', "Generando versión ligera para: " . basename($inputPath));
 
         try {
-            // Use ffmpeg to convert to a 96kbps MP3
+            // Use the configured ffmpeg path
             $command = [
-                'ffmpeg',
+                $this->ffmpegPath,
                 '-i',
                 $inputPath,
                 '-b:a',
@@ -104,6 +108,7 @@ class AudioAnalysisService
 
             if (!$process->isSuccessful()) {
                 casiel_log('audio_processor', 'Error al generar la versión ligera del audio.', [
+                    'command' => $process->getCommandLine(),
                     'error_output' => $process->getErrorOutput()
                 ], 'error');
                 return false;

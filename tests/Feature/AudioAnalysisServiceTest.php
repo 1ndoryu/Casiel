@@ -1,11 +1,13 @@
 <?php
+
 use app\services\AudioAnalysisService;
 use Mockery\MockInterface;
 use Symfony\Component\Process\Process;
 
 // Helper to create a dummy file for tests if it doesn't exist in Pest.php
 if (!function_exists('create_dummy_file')) {
-    function create_dummy_file(string $path, string $content = 'dummy_content'): void {
+    function create_dummy_file(string $path, string $content = 'dummy_content'): void
+    {
         if (!is_dir(dirname($path))) mkdir(dirname($path), 0777, true);
         file_put_contents($path, $content);
     }
@@ -17,7 +19,8 @@ test('analyze devuelve datos exitosamente al ejecutar el script de python', func
     create_dummy_file($tempFilePath, 'fake-audio-data');
     $expectedData = ['bpm' => 120, 'tonalidad' => 'C', 'escala' => 'major'];
     $pythonScriptPath = base_path('audio.py');
-    $pythonCommand = 'python_test'; // Dummy command for testing
+    $pythonCommand = 'python_test';
+    $ffmpegCommand = 'ffmpeg_test';
 
     $mockProcess = Mockery::mock(Process::class);
     $mockProcess->shouldReceive('setTimeout')->once()->with(120);
@@ -26,13 +29,15 @@ test('analyze devuelve datos exitosamente al ejecutar el script de python', func
     $mockProcess->shouldReceive('getOutput')->once()->andReturn(json_encode($expectedData));
 
     // UPDATE: The constructor signature has changed.
-    $service = new class($pythonCommand, $pythonScriptPath, $mockProcess) extends AudioAnalysisService {
+    $service = new class($pythonCommand, $pythonScriptPath, $ffmpegCommand, $mockProcess) extends AudioAnalysisService {
         private Process $mockedProcess;
-        public function __construct(string $cmd, string $path, Process $mockedProcess) {
-            parent::__construct($cmd, $path);
+        public function __construct(string $cmd, string $path, string $ffmpegPath, Process $mockedProcess)
+        {
+            parent::__construct($cmd, $path, $ffmpegPath);
             $this->mockedProcess = $mockedProcess;
         }
-        protected function createProcess(array $command): Process {
+        protected function createProcess(array $command): Process
+        {
             return $this->mockedProcess;
         }
     };
@@ -54,6 +59,7 @@ test('analyze maneja correctamente un fallo del proceso', function () {
     create_dummy_file($tempFilePath, 'fake-audio-data');
     $pythonScriptPath = base_path('audio.py');
     $pythonCommand = 'python_test';
+    $ffmpegCommand = 'ffmpeg_test';
 
     $mockProcess = Mockery::mock(Process::class);
     $mockProcess->shouldReceive('setTimeout')->once()->with(120);
@@ -61,15 +67,17 @@ test('analyze maneja correctamente un fallo del proceso', function () {
     $mockProcess->shouldReceive('isSuccessful')->once()->andReturn(false);
     $mockProcess->shouldReceive('getCommandLine')->once()->andReturn('python_test audio.py analyze ...');
     $mockProcess->shouldReceive('getErrorOutput')->once()->andReturn('Python script error');
-    
+
     // UPDATE: The constructor signature has changed.
-    $service = new class($pythonCommand, $pythonScriptPath, $mockProcess) extends AudioAnalysisService {
+    $service = new class($pythonCommand, $pythonScriptPath, $ffmpegCommand, $mockProcess) extends AudioAnalysisService {
         private Process $mockedProcess;
-        public function __construct(string $cmd, string $path, Process $mockedProcess) {
-            parent::__construct($cmd, $path);
+        public function __construct(string $cmd, string $path, string $ffmpegPath, Process $mockedProcess)
+        {
+            parent::__construct($cmd, $path, $ffmpegPath);
             $this->mockedProcess = $mockedProcess;
         }
-        protected function createProcess(array $command): Process {
+        protected function createProcess(array $command): Process
+        {
             return $this->mockedProcess;
         }
     };
@@ -90,6 +98,7 @@ test('generateLightweightVersion llama a ffmpeg con los argumentos correctos', f
     create_dummy_file($inputFile, 'fake-wav-data');
     $pythonScriptPath = base_path('audio.py');
     $pythonCommand = 'python_test';
+    $ffmpegCommand = 'ffmpeg_test';
 
     $mockProcess = Mockery::mock(Process::class);
     $mockProcess->shouldReceive('setTimeout')->once()->with(180);
@@ -97,15 +106,17 @@ test('generateLightweightVersion llama a ffmpeg con los argumentos correctos', f
     $mockProcess->shouldReceive('isSuccessful')->once()->andReturn(true);
 
     // UPDATE: The constructor signature has changed.
-    $service = new class($pythonCommand, $pythonScriptPath, $mockProcess) extends AudioAnalysisService {
+    $service = new class($pythonCommand, $pythonScriptPath, $ffmpegCommand, $mockProcess) extends AudioAnalysisService {
         private Process $mockedProcess;
-        public function __construct(string $cmd, string $path, Process $mockedProcess) {
-            parent::__construct($cmd, $path);
+        public function __construct(string $cmd, string $path, string $ffmpegPath, Process $mockedProcess)
+        {
+            parent::__construct($cmd, $path, $ffmpegPath);
             $this->mockedProcess = $mockedProcess;
         }
-        protected function createProcess(array $command): Process {
+        protected function createProcess(array $command): Process
+        {
             // This test focuses on ffmpeg, ensure the command matches
-            expect($command[0])->toBe('ffmpeg');
+            expect($command[0])->toBe('ffmpeg_test');
             return $this->mockedProcess;
         }
     };
@@ -122,25 +133,29 @@ test('generateLightweightVersion maneja un fallo de ffmpeg', function () {
     create_dummy_file($inputFile, 'fake-wav-data');
     $pythonScriptPath = base_path('audio.py');
     $pythonCommand = 'python_test';
+    $ffmpegCommand = 'ffmpeg_test';
 
     $mockProcess = Mockery::mock(Process::class);
     $mockProcess->shouldReceive('setTimeout')->once()->with(180);
     $mockProcess->shouldReceive('run')->once();
     $mockProcess->shouldReceive('isSuccessful')->once()->andReturn(false);
     $mockProcess->shouldReceive('getErrorOutput')->once()->andReturn('ffmpeg error');
+    $mockProcess->shouldReceive('getCommandLine')->once()->andReturn('ffmpeg_test ...'); // Add this line
 
     // UPDATE: The constructor signature has changed.
-    $service = new class($pythonCommand, $pythonScriptPath, $mockProcess) extends AudioAnalysisService {
+    $service = new class($pythonCommand, $pythonScriptPath, $ffmpegCommand, $mockProcess) extends AudioAnalysisService {
         private Process $mockedProcess;
-        public function __construct(string $cmd, string $path, Process $mockedProcess) {
-            parent::__construct($cmd, $path);
+        public function __construct(string $cmd, string $path, string $ffmpegPath, Process $mockedProcess)
+        {
+            parent::__construct($cmd, $path, $ffmpegPath);
             $this->mockedProcess = $mockedProcess;
         }
-        protected function createProcess(array $command): Process {
+        protected function createProcess(array $command): Process
+        {
             return $this->mockedProcess;
         }
     };
-    
+
     $result = $service->generateLightweightVersion($inputFile, $outputFile);
 
     expect($result)->toBeFalse();
