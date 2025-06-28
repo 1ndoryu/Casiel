@@ -95,6 +95,20 @@ trait MakesAsyncHttpRequests
 
         array_push($command, '--output', $tempOutputFile);
 
+        // ==========================================================
+        // INICIO DE LA CORRECCIÓN
+        // ==========================================================
+        if (isset($options['json'])) {
+            // Automatically set Content-Type header for JSON requests if it isn't already set.
+            // This ensures Windows cURL requests behave the same as Linux HttpClient requests.
+            if (!isset($options['headers']['Content-Type'])) {
+                $options['headers']['Content-Type'] = 'application/json';
+            }
+        }
+        // ==========================================================
+        // FIN DE LA CORRECCIÓN
+        // ==========================================================
+
         if (!empty($options['headers'])) {
             foreach ($options['headers'] as $key => $value) {
                 $command[] = '-H';
@@ -129,15 +143,15 @@ trait MakesAsyncHttpRequests
             $timerId = Timer::add(0.1, function () use ($process, &$timerId, $onSuccess, $onError, $tempInputFile, $tempOutputFile) {
                 if (!$process->isRunning()) {
                     Timer::del($timerId);
-                    
+
                     try {
                         if ($process->isSuccessful()) {
                             $output = $process->getOutput();
-                            
+
                             if (strlen(trim($output)) < 3) {
                                 throw new \RuntimeException('Respuesta de cURL inválida o vacía. Output: ' . $output . ' | Stderr: ' . $process->getErrorOutput());
                             }
-                            
+
                             $statusCode = (int)substr($output, -3);
                             $responseBody = file_get_contents($tempOutputFile);
 
