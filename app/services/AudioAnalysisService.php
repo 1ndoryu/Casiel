@@ -110,10 +110,17 @@ class AudioAnalysisService
             $output = $process->getOutput();
             $data = json_decode($output, true);
 
-            if (json_last_error() !== JSON_ERROR_NONE && !empty($data['audio_hash'])) {
+            // ==========================================================
+            // INICIO DE LA CORRECCIÓN
+            // ==========================================================
+            // La condición lógica correcta es verificar que NO haya error y que la clave exista.
+            if (json_last_error() === JSON_ERROR_NONE && !empty($data['audio_hash'])) {
                 casiel_log('audio_processor', 'Hash perceptual generado exitosamente.', ['hash' => $data['audio_hash']]);
                 return $data['audio_hash'];
             }
+            // ==========================================================
+            // FIN DE LA CORRECCIÓN
+            // ==========================================================
             
             casiel_log('audio_processor', 'No se pudo decodificar el JSON o falta la clave "audio_hash" en la respuesta del script.', [
                 'output' => $output
