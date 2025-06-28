@@ -173,17 +173,30 @@ class AudioProcessingService
                                                 casiel_log('audio_processor', "Step 7/8: Versión ligera subida.", ['content_id' => $contentId, 'media_id' => $lightweightMediaId]);
 
                                                 $newFileNameBase = $creativeData['nombre_archivo_base'] ?? "audio_sample_{$contentId}";
-                                                $finalContentData = array_merge(
-                                                    $existingContentData,
+
+                                                // ==========================================================
+                                                // INICIO DE LA CORRECCIÓN
+                                                // ==========================================================
+                                                // Primero, consolidar todos los nuevos datos que Casiel ha generado.
+                                                $casielGeneratedData = array_merge(
                                                     $techData,
                                                     $creativeData,
                                                     [
-                                                        'casiel_status' => 'success',
+                                                        'casiel_status'     => 'success',
                                                         'original_media_id' => $mediaId,
-                                                        'light_media_id' => $lightweightMediaId,
+                                                        'light_media_id'    => $lightweightMediaId,
                                                         'original_filename' => $originalFilename,
                                                     ]
                                                 );
+
+                                                // Ahora, combinar con los datos existentes. El operador `+` toma la unión de arrays.
+                                                // Si una clave existe en ambos, se usará el valor del array de la izquierda (`$casielGeneratedData`).
+                                                // Esto asegura que actualicemos con nuestros nuevos datos mientras preservamos
+                                                // cualquier dato antiguo que no hayamos tocado (como un campo 'title').
+                                                $finalContentData = $casielGeneratedData + $existingContentData;
+                                                // ==========================================================
+                                                // FIN DE LA CORRECCIÓN
+                                                // ==========================================================
 
                                                 $finalPayload = [
                                                     'content_data' => $finalContentData,
