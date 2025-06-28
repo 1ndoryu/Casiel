@@ -77,7 +77,7 @@ def analizar_audio(audio_path):
         print(json.dumps(resultados))
 
     except Exception as e:
-        print(json.dumps({"error": f"Error en librosa al analizar el archivo: {str(e)}"}), file=sys.stderr)
+        print(json.dumps({"error": f"Error en librosa al analizar el archivo: {repr(e)}"}), file=sys.stderr)
         sys.exit(1)
 
 def generar_hash_perceptual(audio_path):
@@ -108,7 +108,7 @@ def generar_hash_perceptual(audio_path):
         print(json.dumps({"audio_hash": hash_sha256}))
 
     except Exception as e:
-        print(json.dumps({"error": f"Error en librosa al generar el hash: {str(e)}"}), file=sys.stderr)
+        print(json.dumps({"error": f"Error en librosa al generar el hash: {repr(e)}"}), file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":
