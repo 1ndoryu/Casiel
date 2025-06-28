@@ -2,6 +2,7 @@
 
 namespace app\services;
 
+use app\services\concerns\MakesAsyncHttpRequests;
 use Workerman\Http\Client;
 use Throwable;
 
@@ -10,8 +11,9 @@ use Throwable;
  */
 class GeminiService
 {
+    use MakesAsyncHttpRequests;
+
     protected string $apiUrl;
-    private Client $httpClient;
 
     public function __construct(Client $httpClient)
     {
@@ -34,6 +36,10 @@ class GeminiService
         casiel_log('gemini_api', "Iniciando análisis de Gemini para: " . basename($localAudioPath));
 
         try {
+            if (!file_exists($localAudioPath)) {
+                $onError("No se encontró el archivo de audio local: $localAudioPath");
+                return;
+            }
             $audioContent = file_get_contents($localAudioPath);
             if ($audioContent === false) {
                 $onError("No se pudo leer el archivo de audio local: $localAudioPath");
@@ -63,32 +69,43 @@ class GeminiService
                 ],
             ];
 
-            $this->httpClient->post($this->apiUrl, [
-                'headers' => ['Content-Type' => 'application/json'],
+            $options = [
                 'json' => $requestBody,
                 'timeout' => 90.0,
-            ], function ($response) use ($onSuccess, $onError) {
-                if ($response->getStatusCode() !== 200) {
-                    $onError("La API de Gemini respondió con el código de estado: " . $response->getStatusCode());
-                    return;
-                }
+                'headers' => ['Content-Type' => 'application/json']
+            ];
 
-                $responseBody = json_decode((string)$response->getBody(), true);
+            $this->executeRequest(
+                'POST',
+                $this->apiUrl,
+                $options,
+                function ($responseBody) use ($onSuccess, $onError) {
+                    // SOLUCIÓN: Validar la estructura de la respuesta para evitar errores fatales.
+                    if (empty($responseBody['candidates'][0]['content']['parts'][0]['text'])) {
+                        $errorDetail = json_encode($responseBody);
+                        casiel_log('gemini_api', "La respuesta de la IA no tiene el formato esperado o está vacía.", ['response' => $errorDetail], 'warning');
+                        $onError("La respuesta de la IA no tiene el formato esperado. Respuesta: " . substr($errorDetail, 0, 200));
+                        return;
+                    }
 
-                if (isset($responseBody['candidates'][0]['content']['parts'][0]['text'])) {
                     $jsonText = $responseBody['candidates'][0]['content']['parts'][0]['text'];
-                    casiel_log('gemini_api', "Respuesta JSON recibida de la IA.");
-                    $onSuccess(json_decode($jsonText, true));
-                } else {
-                    casiel_log('gemini_api', "La respuesta de la IA no tiene el formato esperado.", ['response' => $responseBody], 'warning');
-                    $onError("La respuesta de la IA no tiene el formato esperado.");
+                    $decodedJson = json_decode($jsonText, true);
+
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        casiel_log('gemini_api', "Respuesta JSON válida recibida de la IA.");
+                        $onSuccess($decodedJson);
+                    } else {
+                        casiel_log('gemini_api', "La IA devolvió un string que no es JSON válido.", ['response_text' => $jsonText], 'error');
+                        $onError("La respuesta de Gemini no es un JSON válido.");
+                    }
+                },
+                function (string $errorMessage) use ($onError) {
+                    casiel_log('gemini_api', "Error en la petición a Gemini API.", ['error' => $errorMessage], 'error');
+                    $onError("Error en la petición a Gemini API: " . $errorMessage);
                 }
-            }, function ($exception) use ($onError) {
-                casiel_log('gemini_api', "Excepción en la petición a Gemini API.", ['error' => $exception->getMessage()], 'error');
-                $onError("Excepción en la petición a Gemini API: " . $exception->getMessage());
-            });
+            );
         } catch (Throwable $e) {
-            casiel_log('gemini_api', "Error al procesar el audio para Gemini.", ['error' => $e->getMessage()], 'error');
+            casiel_log('gemini_api', "Error fatal al preparar la petición para Gemini.", ['error' => $e->getMessage()], 'error');
             $onError("Error al procesar el audio: " . $e->getMessage());
         }
     }

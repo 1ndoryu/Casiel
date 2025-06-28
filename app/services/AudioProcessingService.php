@@ -21,6 +21,20 @@ class AudioProcessingService
         }
     }
 
+    /**
+     * SOLUCIÓN: Nuevo método para eliminar archivos temporales de forma centralizada.
+     * @param array $filesToDelete
+     */
+    private function cleanupFiles(array $filesToDelete): void
+    {
+        foreach ($filesToDelete as $file) {
+            if (file_exists($file)) {
+                @unlink($file);
+                casiel_log('audio_processor', "Cleanup: Archivo temporal eliminado: " . basename($file), [], 'debug');
+            }
+        }
+    }
+
     public function process(AMQPMessage $msg, \PhpAmqpLib\Channel\AMQPChannel $channel): void
     {
         $payload = json_decode($msg->body, true);
@@ -28,8 +42,13 @@ class AudioProcessingService
         $mediaId = $payload['data']['media_id'] ?? null;
         $filesToDelete = [];
 
-        $handleFailure = function (string $errorMessage) use ($msg, $contentId, $mediaId, $channel) {
-            casiel_log('audio_processor', "Error processing. content_id: {$contentId}, media_id: {$mediaId}. Reason: {$errorMessage}", [], 'error');
+        // SOLUCIÓN: El manejador de fallos ahora captura $filesToDelete por referencia para poder limpiarlos.
+        $handleFailure = function (string $errorMessage) use ($msg, $contentId, $mediaId, $channel, &$filesToDelete) {
+            casiel_log('audio_processor', "Error procesando. content_id: {$contentId}, media_id: {$mediaId}. Razón: {$errorMessage}", [], 'error');
+
+            // Realizar la limpieza también en caso de fallo.
+            $this->cleanupFiles($filesToDelete);
+
             $retryCount = 0;
             if ($headers = $this->getMessageHeaders($msg)) {
                 if (isset($headers['x-death'][0]['count'])) {
@@ -37,30 +56,29 @@ class AudioProcessingService
                 }
             }
             if ($retryCount < self::MAX_RETRIES) {
-                casiel_log('audio_processor', "Processing failed. Retrying (" . ($retryCount + 1) . "/" . (self::MAX_RETRIES + 1) . ").", ['content_id' => $contentId]);
+                casiel_log('audio_processor', "Proceso fallido. Reintentando (" . ($retryCount + 1) . "/" . (self::MAX_RETRIES + 1) . ").", ['content_id' => $contentId]);
+                // Se usa nack y se deja que la DLX de reintento haga su trabajo.
                 $msg->nack(false);
             } else {
-                casiel_log('audio_processor', "Final failure after " . ($retryCount + 1) . " attempts. Sending to DLQ.", ['content_id' => $contentId], 'error');
+                casiel_log('audio_processor', "Fallo final después de " . ($retryCount + 1) . " intentos. Enviando a DLQ.", ['content_id' => $contentId], 'error');
                 $channel->basic_publish($msg, 'casiel_dlx', 'casiel.dlq.final');
                 $msg->ack();
             }
         };
 
         if (!$contentId || !$mediaId) {
-            casiel_log('audio_processor', 'Invalid message or missing required IDs. Discarding permanently.', ['body' => $msg->body], 'error');
+            casiel_log('audio_processor', 'Mensaje inválido o faltan IDs requeridos. Descartando permanentemente.', ['body' => $msg->body], 'error');
             $channel->basic_publish($msg, 'casiel_dlx', 'casiel.dlq.final');
             $msg->ack();
             return;
         }
 
+        // SOLUCIÓN: Se elimina el bloque finally. La limpieza ahora es parte del flujo de éxito/error.
         try {
-            casiel_log('audio_processor', "Starting flow. content_id: {$contentId}, media_id: {$mediaId}");
+            casiel_log('audio_processor', "Iniciando flujo. content_id: {$contentId}, media_id: {$mediaId}");
             $this->runWorkflow($contentId, $mediaId, $msg, $handleFailure, $filesToDelete);
         } catch (Throwable $e) {
-            $handleFailure("Fatal synchronous exception: " . $e->getMessage());
-        } finally {
-            // This method uses the Timer, which fails in tests.
-            $this->scheduleCleanup($filesToDelete);
+            $handleFailure("Excepción síncrona fatal: " . $e->getMessage());
         }
     }
 
@@ -72,7 +90,7 @@ class AudioProcessingService
                 $audioUrl = $mediaDetails['path'] ?? null;
                 $originalFilename = $mediaDetails['metadata']['original_name'] ?? 'audio.tmp';
                 if (!$audioUrl) {
-                    $handleFailure("Could not find 'path' in Sword's media details.");
+                    $handleFailure("No se pudo encontrar 'path' en los detalles del medio de Sword.");
                     return;
                 }
 
@@ -80,20 +98,20 @@ class AudioProcessingService
                 $extension = pathinfo($originalFilename, PATHINFO_EXTENSION) ?: 'tmp';
                 $localPath = "{$this->tempDir}/{$mediaId}_original.{$extension}";
                 $filesToDelete[] = $localPath;
-                casiel_log('audio_processor', "Step 1/7: Audio URL obtained.");
+                casiel_log('audio_processor', "Step 1/7: URL de audio obtenida.");
 
                 $this->swordApiService->downloadFile(
                     $fullAudioUrl,
                     $localPath,
                     function ($downloadedFilePath) use ($localPath, $contentId, $originalFilename, $msg, $handleFailure, &$filesToDelete) {
-                        casiel_log('audio_processor', "Step 2/7: Audio downloaded.");
+                        casiel_log('audio_processor', "Step 2/7: Audio descargado.");
 
                         $techData = $this->audioAnalysisService->analyze($localPath);
                         if ($techData === null) {
-                            $handleFailure("Technical audio analysis failed.");
+                            $handleFailure("El análisis técnico del audio falló.");
                             return;
                         }
-                        casiel_log('audio_processor', "Step 3/7: Technical metadata obtained.");
+                        casiel_log('audio_processor', "Step 3/7: Metadatos técnicos obtenidos.");
 
                         $geminiContext = ['title' => pathinfo($originalFilename, PATHINFO_FILENAME), 'technical_metadata' => $techData];
                         $this->geminiService->analyzeAudio(
@@ -101,29 +119,28 @@ class AudioProcessingService
                             $geminiContext,
                             function ($creativeData) use ($techData, $contentId, $localPath, $msg, $handleFailure, &$filesToDelete) {
                                 if ($creativeData === null) {
-                                    $handleFailure("Creative analysis with Gemini failed.");
+                                    $handleFailure("El análisis creativo con Gemini falló.");
                                     return;
                                 }
-                                casiel_log('audio_processor', "Step 4/7: Creative metadata obtained.");
+                                casiel_log('audio_processor', "Step 4/7: Metadatos creativos obtenidos.");
 
                                 $lightweightPath = "{$this->tempDir}/{$contentId}_light.mp3";
                                 $filesToDelete[] = $lightweightPath;
                                 if (!$this->audioAnalysisService->generateLightweightVersion($localPath, $lightweightPath)) {
-                                    $handleFailure("Failed to generate lightweight version.");
+                                    $handleFailure("Falló la generación de la versión ligera.");
                                     return;
                                 }
-                                casiel_log('audio_processor', "Step 5/7: Lightweight version generated.");
-
+                                casiel_log('audio_processor', "Step 5/7: Versión ligera generada.");
 
                                 $this->swordApiService->uploadMedia(
                                     $lightweightPath,
-                                    function ($lightweightMediaData) use ($techData, $creativeData, $contentId, $msg, $handleFailure) {
+                                    function ($lightweightMediaData) use ($techData, $creativeData, $contentId, $msg, $handleFailure, &$filesToDelete) {
                                         $lightweightUrl = $lightweightMediaData['path'] ?? null;
                                         if (!$lightweightUrl) {
-                                            $handleFailure("Lightweight version upload did not return 'path'.");
+                                            $handleFailure("La subida de la versión ligera no devolvió un 'path'.");
                                             return;
                                         }
-                                        casiel_log('audio_processor', "Step 6/7: Lightweight version uploaded.");
+                                        casiel_log('audio_processor', "Step 6/7: Versión ligera subida.");
 
                                         $newFileNameBase = $creativeData['nombre_archivo_base'] ?? "audio_sample_{$contentId}";
                                         $finalData = [
@@ -134,9 +151,11 @@ class AudioProcessingService
                                         $this->swordApiService->updateContent(
                                             $contentId,
                                             $finalData,
-                                            function () use ($contentId, $msg) {
-                                                casiel_log('audio_processor', "Step 7/7: Content {$contentId} updated. Success!");
+                                            // SOLUCIÓN: El callback final ahora también captura $filesToDelete para limpiarlos.
+                                            function () use ($contentId, $msg, &$filesToDelete) {
+                                                casiel_log('audio_processor', "Step 7/7: Contenido {$contentId} actualizado. ¡Éxito!");
                                                 $msg->ack();
+                                                $this->cleanupFiles($filesToDelete);
                                             },
                                             $handleFailure
                                         );
@@ -147,7 +166,7 @@ class AudioProcessingService
                             $handleFailure
                         );
                     },
-                    fn($error) => $handleFailure("Exception during download: " . $error)
+                    fn($error) => $handleFailure("Excepción durante la descarga: " . $error)
                 );
             },
             $handleFailure
@@ -159,15 +178,5 @@ class AudioProcessingService
         return $msg->has('application_headers') ? $msg->get('application_headers')->getNativeData() : null;
     }
 
-    protected function scheduleCleanup(array $filesToDelete): void
-    {
-        \Workerman\Timer::add(1, function () use ($filesToDelete) {
-            foreach ($filesToDelete as $file) {
-                if (file_exists($file)) {
-                    unlink($file);
-                    casiel_log('audio_processor', "Cleanup: Temporary file deleted: " . basename($file));
-                }
-            }
-        }, null, false);
-    }
+    // SOLUCIÓN: El método scheduleCleanup() se ha eliminado. Su funcionalidad ahora está en cleanupFiles() y se llama directamente.
 }

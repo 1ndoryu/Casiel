@@ -32,6 +32,30 @@ return [
         ],
     ],
 
+    // Canal para el cliente HTTP asíncrono compartido
+    'async_http' => [
+        'handlers' => [
+            [
+                'class' => RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/async_http.log',
+                    $maxFiles,
+                    $logLevel,
+                ],
+                'formatter' => $formatter,
+            ],
+            [
+                'class' => RotatingFileHandler::class,
+                'constructor' => [
+                    runtime_path() . '/logs/master.log',
+                    $maxFiles,
+                    $logLevel,
+                ],
+                'formatter' => $formatter,
+            ]
+        ],
+    ],
+
     // Canal específico para el procesamiento de audio
     'audio_processor' => [
         'handlers' => [

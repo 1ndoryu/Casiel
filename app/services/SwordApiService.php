@@ -2,22 +2,20 @@
 
 namespace app\services;
 
+use app\services\concerns\MakesAsyncHttpRequests;
 use Symfony\Component\Process\Process;
 use Throwable;
 use Workerman\Http\Client;
 use Workerman\Timer;
 
-/**
- * Service to interact with the Sword CMS API asynchronously.
- * Dispatches requests to cURL on Windows and HttpClient on Linux.
- */
 class SwordApiService
 {
+    use MakesAsyncHttpRequests;
+
     private string $apiUrl;
     private string $apiUser;
     private string $apiPassword;
     private ?string $token = null;
-    private Client $httpClient;
 
     public function __construct(Client $httpClient)
     {
@@ -33,147 +31,48 @@ class SwordApiService
             $onSuccess();
             return;
         }
-        casiel_log('sword_api', 'Iniciando autenticación. Detectando sistema operativo.');
-        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-            $this->authenticateWithCurl($onSuccess, $onError);
-        } else {
-            $this->authenticateWithHttpClient($onSuccess, $onError);
-        }
-    }
 
-    private function authenticateWithCurl(callable $onSuccess, callable $onError): void
-    {
-        casiel_log('sword_api', 'Usando método de autenticación cURL para Windows (asíncrono).');
+        casiel_log('sword_api', 'Iniciando autenticación.');
         $loginUrl = rtrim($this->apiUrl, '/') . '/auth/login';
         $payload = ['identifier' => $this->apiUser, 'password' => $this->apiPassword];
-        $options = ['json' => $payload, 'headers' => ['Content-Type' => 'application/json', 'Accept' => 'application/json']];
-        $this->executeRequestWithCurl('POST', $loginUrl, $options, function ($data) use ($onSuccess, $onError) {
+        $options = ['json' => $payload, 'headers' => ['Accept' => 'application/json']];
+
+        $this->executeRequest('POST', $loginUrl, $options, function ($data) use ($onSuccess, $onError) {
             if (isset($data['data']['access_token'])) {
                 $this->token = $data['data']['access_token'];
-                casiel_log('sword_api', 'Autenticación asíncrona con cURL exitosa.');
-                $onSuccess();
-            } else {
-                $onError("La respuesta de autenticación de cURL no contiene un token.");
-            }
-        }, $onError);
-    }
-
-    private function authenticateWithHttpClient(callable $onSuccess, callable $onError): void
-    {
-        casiel_log('sword_api', 'Usando método de autenticación HttpClient (Linux/Mac).');
-        $loginUrl = rtrim($this->apiUrl, '/') . '/auth/login';
-        $payload = ['identifier' => $this->apiUser, 'password' => $this->apiPassword];
-        $options = ['json' => $payload, 'timeout' => 30.0, 'headers' => ['Accept' => 'application/json']];
-        $this->httpClient->post($loginUrl, $options, function ($response) use ($onSuccess, $onError) {
-            $body = json_decode((string)$response->getBody(), true);
-            if (isset($body['data']['access_token'])) {
-                $this->token = $body['data']['access_token'];
                 casiel_log('sword_api', 'Autenticación exitosa.');
                 $onSuccess();
             } else {
-                $onError("La respuesta de autenticación no contiene un token.");
+                $errorMessage = "La respuesta de autenticación de Sword no contiene un token.";
+                casiel_log('sword_api', $errorMessage, ['response' => $data], 'error');
+                $onError($errorMessage);
             }
         }, $onError);
     }
 
-    private function executeRequest(string $method, string $endpoint, array $options, callable $onSuccess, callable $onError): void
+    private function authenticatedRequest(string $method, string $endpoint, array $options, callable $onSuccess, callable $onError): void
     {
         $this->authenticate(
             function () use ($method, $endpoint, $options, $onSuccess, $onError) {
                 $url = rtrim($this->apiUrl, '/') . '/' . ltrim($endpoint, '/');
                 $defaultHeaders = ['Authorization' => "Bearer {$this->token}", 'Accept' => 'application/json'];
                 $options['headers'] = array_merge($defaultHeaders, $options['headers'] ?? []);
-
-                if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-                    $this->executeRequestWithCurl($method, $url, $options, $onSuccess, $onError);
-                } else {
-                    $this->executeRequestWithHttpClient($method, $url, $options, $onSuccess, $onError);
-                }
+                $this->executeRequest($method, $url, $options, $onSuccess, $onError);
             },
             $onError
         );
     }
 
-    private function executeRequestWithHttpClient(string $method, string $url, array $options, callable $onSuccess, callable $onError): void
-    {
-        $this->httpClient->{$method}($url, $options, function ($response) use ($onSuccess, $onError) {
-            if (!$response) {
-                $onError("Fallo de conexión (respuesta nula).");
-                return;
-            }
-            if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
-                $onSuccess(json_decode((string)$response->getBody(), true));
-            } else {
-                $onError("Error en API: Status " . $response->getStatusCode());
-            }
-        }, $onError);
-    }
-
-    private function executeRequestWithCurl(string $method, string $url, array $options, callable $onSuccess, callable $onError): void
-    {
-        $command = ['curl', '-s', '-L', '-X', strtoupper($method)];
-        $tempFile = null;
-
-        foreach ($options['headers'] as $key => $value) {
-            $command[] = '-H';
-            $command[] = "$key: $value";
-        }
-
-        if (isset($options['multipart'])) {
-            $part = $options['multipart'][0];
-            $tempFile = tempnam(sys_get_temp_dir(), 'casiel_curl');
-            file_put_contents($tempFile, $part['contents']);
-            $command[] = '-F';
-            $command[] = "{$part['name']}=@{$tempFile};filename={$part['filename']}";
-        } elseif (in_array(strtoupper($method), ['POST', 'PUT', 'PATCH'])) {
-            $body = !empty($options['body']) ? $options['body'] : json_encode($options['json'] ?? []);
-            $command[] = '-d';
-            $command[] = $body;
-        }
-
-        $command[] = $url;
-
-        casiel_log('sword_api', '[CURL] Ejecutando comando', ['command' => implode(' ', $command)]);
-
-        try {
-            $process = new Process($command);
-            $process->setTimeout(60);
-            $process->start();
-
-            $timerId = Timer::add(0.1, function () use ($process, &$timerId, $onSuccess, $onError, $tempFile) {
-                if (!$process->isRunning()) {
-                    Timer::del($timerId);
-                    if ($tempFile) @unlink($tempFile);
-
-                    if ($process->isSuccessful()) {
-                        $responseBody = $process->getOutput();
-                        $responseData = json_decode($responseBody, true);
-                        if (json_last_error() !== JSON_ERROR_NONE) {
-                            $onError("Fallo al decodificar JSON de cURL: " . $responseBody);
-                            return;
-                        }
-                        $onSuccess($responseData);
-                    } else {
-                        $onError("Proceso cURL falló: " . $process->getErrorOutput());
-                    }
-                }
-            });
-        } catch (Throwable $e) {
-            if ($tempFile) @unlink($tempFile);
-            $onError("Excepción al iniciar proceso cURL: " . $e->getMessage());
-        }
-    }
-
     public function getMediaDetails(int $mediaId, callable $onSuccess, callable $onError): void
     {
         casiel_log('sword_api', "Obteniendo detalles del medio: {$mediaId}");
-        $this->executeRequest('get', "media/{$mediaId}", [], fn($res) => $onSuccess($res['data'] ?? $res), $onError);
+        $this->authenticatedRequest('get', "media/{$mediaId}", [], fn($res) => $onSuccess($res['data'] ?? $res), $onError);
     }
 
     public function updateContent(int $contentId, array $data, callable $onSuccess, callable $onError): void
     {
         casiel_log('sword_api', "Actualizando contenido: {$contentId}");
-        $this->executeRequest('post', "contents/{$contentId}", ['json' => $data], fn($res) => $onSuccess($res['data'] ?? $res), $onError);
+        $this->authenticatedRequest('post', "contents/{$contentId}", ['json' => $data], fn($res) => $onSuccess($res['data'] ?? $res), $onError);
     }
 
     public function uploadMedia(string $filePath, callable $onSuccess, callable $onError): void
@@ -183,8 +82,17 @@ class SwordApiService
             $onError("El archivo a subir no existe: {$filePath}");
             return;
         }
-        $options = ['multipart' => [['name' => 'file', 'contents' => file_get_contents($filePath), 'filename' => basename($filePath)]]];
-        $this->executeRequest('post', 'media', $options, fn($res) => $onSuccess($res['data'] ?? $res), $onError);
+
+        // Para cURL, pasamos la ruta. Para HttpClient, el contenido. El trait no maneja esto.
+        // Haremos una excepción para la subida de archivos para mantener la compatibilidad.
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            // El trait de cURL espera una estructura específica para 'multipart'.
+            $options = ['multipart' => [['name' => 'file', 'contents' => $filePath, 'filename' => basename($filePath)]]];
+        } else {
+             $options = ['multipart' => [['name' => 'file', 'contents' => file_get_contents($filePath), 'filename' => basename($filePath)]]];
+        }
+
+        $this->authenticatedRequest('post', 'media', $options, fn($res) => $onSuccess($res['data'] ?? $res), $onError);
     }
 
     public function downloadFile(string $fileUrl, string $destinationPath, callable $onSuccess, callable $onError): void
@@ -200,10 +108,8 @@ class SwordApiService
     private function downloadFileWithHttpClient(string $fileUrl, string $destinationPath, callable $onSuccess, callable $onError): void
     {
         casiel_log('sword_api', 'Usando HttpClient para la descarga.');
-
         $this->httpClient->get($fileUrl, [
-            'sink' => $destinationPath, // Stream response directly to file
-            'timeout' => 300, // 5 minutes timeout for download
+            'sink' => $destinationPath, 'timeout' => 300,
         ], function ($response) use ($onSuccess, $onError, $destinationPath) {
             if (!$response) {
                 $onError("Fallo de conexión en la descarga (respuesta nula).");
@@ -222,19 +128,17 @@ class SwordApiService
     {
         casiel_log('sword_api', 'Usando cURL para la descarga en Windows.');
         $command = ['curl', '-f', '-s', '-L', '-o', $destinationPath, $fileUrl];
-
         casiel_log('sword_api', '[CURL-DOWNLOAD] Ejecutando comando', ['command' => implode(' ', $command)]);
 
         try {
             $process = new Process($command);
-            $process->setTimeout(300); // 5 minutes timeout
+            $process->setTimeout(300);
             $process->start();
 
             $timerId = Timer::add(0.1, function () use ($process, &$timerId, $onSuccess, $onError, $destinationPath) {
                 if (!$process->isRunning()) {
                     Timer::del($timerId);
                     if ($process->isSuccessful()) {
-                        // Verify file was actually created and has size > 0
                         if (file_exists($destinationPath) && filesize($destinationPath) > 0) {
                             casiel_log('sword_api', 'Archivo descargado con cURL exitosamente en: ' . $destinationPath);
                             $onSuccess($destinationPath);
