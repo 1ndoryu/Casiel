@@ -195,7 +195,7 @@ class AudioWorkflowService
         );
     }
 
-    private function step10_updateContent(int $contentId, array $mediaDetails, array $existingContent, string $audioHash, array $techData, array $creativeData, int $lightweightMediaId, callable $onSuccess, callable $onError): void
+   private function step10_updateContent(int $contentId, array $mediaDetails, array $existingContent, string $audioHash, array $techData, array $creativeData, int $lightweightMediaId, callable $onSuccess, callable $onError): void
     {
         $casielGeneratedData = array_merge(
             $techData,
@@ -210,8 +210,12 @@ class AudioWorkflowService
         );
 
         $existingContentData = $existingContent['content_data'] ?? [];
-        // La data de Casiel toma precedencia sobre la existente.
-        $finalContentData = $casielGeneratedData + $existingContentData;
+        // SOLUCIÓN: Se reemplaza el operador de unión (+) con array_merge().
+        // Esto asegura que los datos existentes en el contenido (ej. un 'title' personalizado)
+        // se conserven. Los valores de `$casielGeneratedData` (segundo argumento) tienen
+        // prioridad y sobreescribirán cualquier clave que ya exista, logrando una
+        // actualización inteligente en lugar de un reemplazo destructivo.
+        $finalContentData = array_merge($existingContentData, $casielGeneratedData);
 
         $newFileNameBase = $creativeData['nombre_archivo_base'] ?? "audio_sample_{$contentId}";
         $finalPayload = [
