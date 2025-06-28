@@ -5,10 +5,12 @@ use Throwable;
 
 class AudioAnalysisService
 {
+    private string $pythonCommand;
     private string $pythonScriptPath;
 
-    public function __construct(string $pythonScriptPath)
+    public function __construct(string $pythonCommand, string $pythonScriptPath)
     {
+        $this->pythonCommand = $pythonCommand;
         $this->pythonScriptPath = $pythonScriptPath;
     }
 
@@ -40,12 +42,14 @@ class AudioAnalysisService
         }
 
         try {
-            $process = $this->createProcess(['python3', $this->pythonScriptPath, 'analyze', $filePath]);
+            // Use the injected python command
+            $process = $this->createProcess([$this->pythonCommand, $this->pythonScriptPath, 'analyze', $filePath]);
             $process->setTimeout(120); // 2 minutes timeout for analysis
             $process->run();
 
             if (!$process->isSuccessful()) {
                 casiel_log('audio_processor', 'Error al ejecutar el script de análisis de audio.', [
+                    'command' => $process->getCommandLine(),
                     'error_output' => $process->getErrorOutput()
                 ], 'error');
                 return null;

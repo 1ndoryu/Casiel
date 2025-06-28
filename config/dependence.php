@@ -13,11 +13,13 @@ return [
         // Inject the http client to make the service testable
         return new SwordApiService(new HttpClient());
     },
-    // SOLUCIÓN: Actualizar la definición en el contenedor de dependencias
-    // para que coincida con el nuevo constructor que requiere una ruta.
+    
+    // SOLUTION: Update the service definition to inject the python command from .env
     AudioAnalysisService::class => function () {
-        return new AudioAnalysisService(base_path('audio.py'));
+        $pythonCommand = getenv('PYTHON_COMMAND') ?: 'python3'; // Fallback to 'python3' for Linux/Mac
+        return new AudioAnalysisService($pythonCommand, base_path('audio.py'));
     },
+
     GeminiService::class => function () {
         // This service now requires an HttpClient for testability
         return new GeminiService(new HttpClient());
