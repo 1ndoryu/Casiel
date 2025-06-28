@@ -63,6 +63,14 @@ class SwordApiService
         );
     }
 
+    public function getContent(int $contentId, callable $onSuccess, callable $onError): void
+    {
+        casiel_log('sword_api', "Obteniendo detalles del contenido: {$contentId}");
+        // NOTA: Este endpoint debe existir en Sword y permitir acceso de administrador
+        // para obtener cualquier contenido por ID, sin importar su estado.
+        $this->authenticatedRequest('get', "admin/contents/{$contentId}", [], fn($res) => $onSuccess($res['data'] ?? $res), $onError);
+    }
+
     public function getMediaDetails(int $mediaId, callable $onSuccess, callable $onError): void
     {
         casiel_log('sword_api', "Obteniendo detalles del medio: {$mediaId}");
