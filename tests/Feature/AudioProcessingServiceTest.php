@@ -26,7 +26,6 @@ beforeEach(function () {
     $this->swordApiMock = Mockery::mock(SwordApiService::class);
     $this->audioAnalysisMock = Mockery::mock(AudioAnalysisService::class);
     $this->geminiApiMock = Mockery::mock(GeminiService::class);
-    $this->httpClientMock = Mockery::mock(Client::class);
     $this->channelMock = Mockery::mock(AMQPChannel::class);
     $this->realAudioPath = base_path('tests/Melancholic Guitar_Eizn_2upra.mp3');
 
@@ -35,8 +34,7 @@ beforeEach(function () {
     $this->processingServiceTestDouble = new class(
         $this->swordApiMock,
         $this->audioAnalysisMock,
-        $this->geminiApiMock,
-        $this->httpClientMock
+        $this->geminiApiMock
     ) extends AudioProcessingService {
         /** @var array|null Control the headers for retry tests. */
         public ?array $mockHeaders = null;
@@ -73,10 +71,13 @@ test('proceso completo de un audio real de forma exitosa', function () {
 
     // Set expectations for mocks
     $this->swordApiMock->shouldReceive('getMediaDetails')->once()->with($mediaId, Mockery::any(), Mockery::any())
-        ->andReturnUsing(fn ($id, $onSuccess) => $onSuccess(['path' => 'uploads/test.mp3', 'metadata' => ['original_name' => 'test_audio.mp3']]));
+        ->andReturnUsing(fn($id, $onSuccess) => $onSuccess(['path' => 'uploads/test.mp3', 'metadata' => ['original_name' => 'test_audio.mp3']]));
 
-    $this->httpClientMock->shouldReceive('get')->once()
-        ->andReturnUsing(fn ($url, $opt, $onSuccess) => $onSuccess(new WorkermanResponse(200, [], file_get_contents($this->realAudioPath))));
+    $this->swordApiMock->shouldReceive('downloadFile')->once()
+        ->andReturnUsing(function (string $url, string $destPath, callable $onSuccess) {
+            file_put_contents($destPath, file_get_contents($this->realAudioPath));
+            $onSuccess($destPath);
+        });
 
     $this->audioAnalysisMock->shouldReceive('analyze')->once()->andReturn(['bpm' => 120]);
     $this->audioAnalysisMock->shouldReceive('generateLightweightVersion')->once()
@@ -85,10 +86,10 @@ test('proceso completo de un audio real de forma exitosa', function () {
             return true;
         });
 
-    $this->geminiApiMock->shouldReceive('analyzeAudio')->once()->andReturnUsing(fn ($p, $c, $onSuccess) => $onSuccess(['nombre_archivo_base' => 'test']));
-    $this->swordApiMock->shouldReceive('uploadMedia')->once()->andReturnUsing(fn ($p, $onSuccess) => $onSuccess(['path' => 'uploads/light.mp3']));
+    $this->geminiApiMock->shouldReceive('analyzeAudio')->once()->andReturnUsing(fn($p, $c, $onSuccess) => $onSuccess(['nombre_archivo_base' => 'test']));
+    $this->swordApiMock->shouldReceive('uploadMedia')->once()->andReturnUsing(fn($p, $onSuccess) => $onSuccess(['path' => 'uploads/light.mp3']));
     $this->swordApiMock->shouldReceive('updateContent')->once()->with($contentId, Mockery::any(), Mockery::any(), Mockery::any())
-        ->andReturnUsing(fn ($id, $d, $onSuccess) => $onSuccess());
+        ->andReturnUsing(fn($id, $d, $onSuccess) => $onSuccess());
 
     $amqpMessageMock->shouldReceive('ack')->once();
 
@@ -105,7 +106,7 @@ test('mensaje es enviado a reintento (nack) en el primer fallo', function () {
     $mockMsg->body = json_encode(['data' => ['content_id' => 456, 'media_id' => 789]]);
 
     $this->swordApiMock->shouldReceive('getMediaDetails')->once()
-        ->andReturnUsing(fn ($id, $onSuccess, $onError) => $onError("Sword API is down"));
+        ->andReturnUsing(fn($id, $onSuccess, $onError) => $onError("Sword API is down"));
 
     $mockMsg->shouldReceive('nack')->once()->with(false);
 
@@ -122,7 +123,7 @@ test('mensaje es enviado a la DLQ final después de maximos reintentos', functio
     $mockMsg->body = json_encode(['data' => ['content_id' => 789, 'media_id' => 101]]);
 
     $this->swordApiMock->shouldReceive('getMediaDetails')->once()
-        ->andReturnUsing(fn ($id, $onSuccess, $onError) => $onError("Sword API is still down"));
+        ->andReturnUsing(fn($id, $onSuccess, $onError) => $onError("Sword API is still down"));
 
     $this->channelMock->shouldReceive('basic_publish')->once()->with($mockMsg, 'casiel_dlx', 'casiel.dlq.final');
     $mockMsg->shouldReceive('ack')->once();

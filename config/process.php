@@ -66,8 +66,7 @@ return [
             'audioProcessingService' => new AudioProcessingService(
                 new SwordApiService(new HttpClient()),
                 new AudioAnalysisService(base_path('audio.py')),
-                new GeminiService(new HttpClient()),
-                new HttpClient()
+                new GeminiService(new HttpClient())
             ),
         ]
     ]
