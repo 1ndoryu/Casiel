@@ -80,6 +80,55 @@ class AudioAnalysisService
     }
 
     /**
+     * Generates a perceptual hash for an audio file.
+     *
+     * @param string $filePath The absolute path to the audio file.
+     * @return string|null The generated hash or null on failure.
+     */
+    public function generatePerceptualHash(string $filePath): ?string
+    {
+        casiel_log('audio_processor', "Generando hash perceptual para: " . basename($filePath));
+
+        if (!file_exists($filePath)) {
+            casiel_log('audio_processor', "El archivo para generar hash no existe: {$filePath}", [], 'error');
+            return null;
+        }
+
+        try {
+            $process = $this->createProcess([$this->pythonCommand, $this->pythonScriptPath, 'hash', $filePath]);
+            $process->setTimeout(60); // 1 minute timeout for hashing
+            $process->run();
+
+            if (!$process->isSuccessful()) {
+                casiel_log('audio_processor', 'Error al ejecutar el script de generación de hash.', [
+                    'command' => $process->getCommandLine(),
+                    'error_output' => $process->getErrorOutput()
+                ], 'error');
+                return null;
+            }
+
+            $output = $process->getOutput();
+            $data = json_decode($output, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE && !empty($data['audio_hash'])) {
+                casiel_log('audio_processor', 'Hash perceptual generado exitosamente.', ['hash' => $data['audio_hash']]);
+                return $data['audio_hash'];
+            }
+            
+            casiel_log('audio_processor', 'No se pudo decodificar el JSON o falta la clave "audio_hash" en la respuesta del script.', [
+                'output' => $output
+            ], 'error');
+            return null;
+
+        } catch (Throwable $e) {
+            casiel_log('audio_processor', 'Excepción durante la generación del hash perceptual.', [
+                'error' => $e->getMessage()
+            ], 'error');
+            return null;
+        }
+    }
+
+    /**
      * Generates a lightweight version of an audio file using ffmpeg.
      *
      * @param string $inputPath The absolute path to the original audio file.

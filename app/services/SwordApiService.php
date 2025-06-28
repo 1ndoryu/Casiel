@@ -70,6 +70,26 @@ class SwordApiService
         // para obtener cualquier contenido por ID, sin importar su estado.
         $this->authenticatedRequest('get', "admin/contents/{$contentId}", [], fn($res) => $onSuccess($res['data'] ?? $res), $onError);
     }
+    
+    /**
+     * Finds content by its perceptual audio hash.
+     * The Sword API is expected to return a 200 OK with `data: null` if not found.
+     *
+     * @param string $hash The audio hash to search for.
+     * @param callable $onSuccess Callback that receives the content data or null.
+     * @param callable $onError Error callback.
+     */
+    public function findContentByHash(string $hash, callable $onSuccess, callable $onError): void
+    {
+        casiel_log('sword_api', "Buscando contenido por hash: {$hash}");
+        $this->authenticatedRequest(
+            'get',
+            "admin/contents/by-hash/{$hash}",
+            [],
+            fn($response) => $onSuccess($response['data'] ?? null),
+            $onError
+        );
+    }
 
     public function getMediaDetails(int $mediaId, callable $onSuccess, callable $onError): void
     {

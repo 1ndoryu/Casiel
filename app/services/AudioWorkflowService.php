@@ -35,7 +35,7 @@ class AudioWorkflowService
         $this->swordApiService->getContent(
             $contentId,
             function ($existingContent) use ($contentId, $mediaId, $onSuccess, $onError) {
-                casiel_log('audio_processor', "Step 1/8: Contenido existente obtenido.", ['content_id' => $contentId]);
+                casiel_log('audio_processor', "Step 1/X: Contenido existente obtenido.", ['content_id' => $contentId]);
                 $this->step2_getMediaDetails($contentId, $mediaId, $existingContent, $onSuccess, $onError);
             },
             $onError
@@ -47,7 +47,7 @@ class AudioWorkflowService
         $this->swordApiService->getMediaDetails(
             $mediaId,
             function ($mediaDetails) use ($contentId, $existingContent, $onSuccess, $onError) {
-                casiel_log('audio_processor', "Step 2/8: Detalles del medio obtenidos.", ['content_id' => $contentId]);
+                casiel_log('audio_processor', "Step 2/X: Detalles del medio obtenidos.", ['content_id' => $contentId]);
                 $this->step3_downloadFile($contentId, $mediaDetails, $existingContent, $onSuccess, $onError);
             },
             $onError
@@ -70,25 +70,79 @@ class AudioWorkflowService
             $fullAudioUrl,
             $localPath,
             function ($downloadedPath) use ($contentId, $mediaDetails, $existingContent, $onSuccess, $onError) {
-                casiel_log('audio_processor', "Step 3/8: Audio descargado.", ['content_id' => $contentId]);
-                $this->step4_analyzeTechnical($contentId, $downloadedPath, $mediaDetails, $existingContent, $onSuccess, $onError);
+                casiel_log('audio_processor', "Step 3/X: Audio descargado.", ['content_id' => $contentId]);
+                $this->step4_generateHash($contentId, $downloadedPath, $mediaDetails, $existingContent, $onSuccess, $onError);
             },
             fn($err) => $onError("Error en descarga: " . $err)
         );
     }
 
-    private function step4_analyzeTechnical(int $contentId, string $localPath, array $mediaDetails, array $existingContent, callable $onSuccess, callable $onError): void
+    private function step4_generateHash(int $contentId, string $localPath, array $mediaDetails, array $existingContent, callable $onSuccess, callable $onError): void
+    {
+        $audioHash = $this->audioAnalysisService->generatePerceptualHash($localPath);
+        if ($audioHash === null) {
+            $onError("La generación del hash perceptual falló. No se puede continuar con la detección de duplicados.");
+            return;
+        }
+        casiel_log('audio_processor', "Step 4/X: Hash perceptual generado.", ['content_id' => $contentId, 'hash' => $audioHash]);
+        $this->step5_findDuplicateByHash($contentId, $localPath, $mediaDetails, $existingContent, $audioHash, $onSuccess, $onError);
+    }
+
+    private function step5_findDuplicateByHash(int $contentId, string $localPath, array $mediaDetails, array $existingContent, string $audioHash, callable $onSuccess, callable $onError): void
+    {
+        $this->swordApiService->findContentByHash(
+            $audioHash,
+            function ($duplicateContent) use ($contentId, $localPath, $mediaDetails, $existingContent, $audioHash, $onSuccess, $onError) {
+                if ($duplicateContent !== null) {
+                    casiel_log('audio_processor', "Step 5/X: DUPLICADO ENCONTRADO. ID del original: {$duplicateContent['id']}", ['content_id' => $contentId]);
+                    $this->handleDuplicate($contentId, $mediaDetails, $duplicateContent, $onSuccess, $onError);
+                } else {
+                    casiel_log('audio_processor', "Step 5/X: No se encontraron duplicados. Continuando con el flujo normal.", ['content_id' => $contentId]);
+                    $this->step6_analyzeTechnical($contentId, $localPath, $mediaDetails, $existingContent, $audioHash, $onSuccess, $onError);
+                }
+            },
+            $onError
+        );
+    }
+
+    private function handleDuplicate(int $newContentId, array $newMediaDetails, array $duplicateContent, callable $onSuccess, callable $onError): void
+    {
+        $payload = [
+            'content_data' => array_merge(
+                $duplicateContent['content_data'] ?? [], // Reutiliza toda la data del duplicado
+                [
+                    'casiel_status' => 'duplicate',
+                    'casiel_error' => null, // Limpia cualquier error previo
+                    'duplicate_of_content_id' => $duplicateContent['id'],
+                    'original_media_id' => $newMediaDetails['id'], // Mantiene referencia al medio original de esta tarea
+                    'original_filename' => $newMediaDetails['metadata']['original_name'] ?? null,
+                ]
+            )
+        ];
+
+        $this->swordApiService->updateContent(
+            $newContentId,
+            $payload,
+            function () use ($newContentId, $onSuccess) {
+                casiel_log('audio_processor', "Contenido {$newContentId} actualizado como duplicado. ¡Éxito!", [], 'info');
+                $onSuccess(); // ¡Trabajo completado!
+            },
+            $onError
+        );
+    }
+
+    private function step6_analyzeTechnical(int $contentId, string $localPath, array $mediaDetails, array $existingContent, string $audioHash, callable $onSuccess, callable $onError): void
     {
         $techData = $this->audioAnalysisService->analyze($localPath);
         if ($techData === null) {
             $onError("El análisis técnico del audio falló.");
             return;
         }
-        casiel_log('audio_processor', "Step 4/8: Metadatos técnicos obtenidos.", ['content_id' => $contentId]);
-        $this->step5_analyzeCreative($contentId, $localPath, $mediaDetails, $existingContent, $techData, $onSuccess, $onError);
+        casiel_log('audio_processor', "Step 6/10: Metadatos técnicos obtenidos.", ['content_id' => $contentId]);
+        $this->step7_analyzeCreative($contentId, $localPath, $mediaDetails, $existingContent, $audioHash, $techData, $onSuccess, $onError);
     }
 
-    private function step5_analyzeCreative(int $contentId, string $localPath, array $mediaDetails, array $existingContent, array $techData, callable $onSuccess, callable $onError): void
+    private function step7_analyzeCreative(int $contentId, string $localPath, array $mediaDetails, array $existingContent, string $audioHash, array $techData, callable $onSuccess, callable $onError): void
     {
         $geminiContext = [
             'title' => pathinfo($mediaDetails['metadata']['original_name'] ?? '', PATHINFO_FILENAME),
@@ -99,19 +153,19 @@ class AudioWorkflowService
         $this->geminiService->analyzeAudio(
             $localPath,
             $geminiContext,
-            function ($creativeData) use ($contentId, $localPath, $mediaDetails, $existingContent, $techData, $onSuccess, $onError) {
+            function ($creativeData) use ($contentId, $localPath, $mediaDetails, $existingContent, $audioHash, $techData, $onSuccess, $onError) {
                 if ($creativeData === null) {
                     $onError("El análisis creativo con Gemini falló.");
                     return;
                 }
-                casiel_log('audio_processor', "Step 5/8: Metadatos creativos obtenidos.", ['content_id' => $contentId]);
-                $this->step6_generateLightweight($contentId, $localPath, $mediaDetails, $existingContent, $techData, $creativeData, $onSuccess, $onError);
+                casiel_log('audio_processor', "Step 7/10: Metadatos creativos obtenidos.", ['content_id' => $contentId]);
+                $this->step8_generateLightweight($contentId, $localPath, $mediaDetails, $existingContent, $audioHash, $techData, $creativeData, $onSuccess, $onError);
             },
             $onError
         );
     }
 
-    private function step6_generateLightweight(int $contentId, string $localPath, array $mediaDetails, array $existingContent, array $techData, array $creativeData, callable $onSuccess, callable $onError): void
+    private function step8_generateLightweight(int $contentId, string $localPath, array $mediaDetails, array $existingContent, string $audioHash, array $techData, array $creativeData, callable $onSuccess, callable $onError): void
     {
         $baseNameForLight = $creativeData['nombre_archivo_base'] ?? "{$contentId}_light";
         $lightweightPath = $this->fileHandler->createLightweightFilePath($baseNameForLight);
@@ -120,34 +174,35 @@ class AudioWorkflowService
             $onError("Falló la generación de la versión ligera.");
             return;
         }
-        casiel_log('audio_processor', "Step 6/8: Versión ligera generada.", ['content_id' => $contentId]);
-        $this->step7_uploadLightweight($contentId, $lightweightPath, $mediaDetails, $existingContent, $techData, $creativeData, $onSuccess, $onError);
+        casiel_log('audio_processor', "Step 8/10: Versión ligera generada.", ['content_id' => $contentId]);
+        $this->step9_uploadLightweight($contentId, $lightweightPath, $mediaDetails, $existingContent, $audioHash, $techData, $creativeData, $onSuccess, $onError);
     }
 
-    private function step7_uploadLightweight(int $contentId, string $lightweightPath, array $mediaDetails, array $existingContent, array $techData, array $creativeData, callable $onSuccess, callable $onError): void
+    private function step9_uploadLightweight(int $contentId, string $lightweightPath, array $mediaDetails, array $existingContent, string $audioHash, array $techData, array $creativeData, callable $onSuccess, callable $onError): void
     {
         $this->swordApiService->uploadMedia(
             $lightweightPath,
-            function ($lightweightMediaData) use ($contentId, $mediaDetails, $existingContent, $techData, $creativeData, $onSuccess, $onError) {
+            function ($lightweightMediaData) use ($contentId, $mediaDetails, $existingContent, $audioHash, $techData, $creativeData, $onSuccess, $onError) {
                 $lightweightMediaId = $lightweightMediaData['id'] ?? null;
                 if (!$lightweightMediaId) {
                     $onError("La subida de la versión ligera no devolvió 'id'.");
                     return;
                 }
-                casiel_log('audio_processor', "Step 7/8: Versión ligera subida.", ['content_id' => $contentId, 'media_id' => $lightweightMediaId]);
-                $this->step8_updateContent($contentId, $mediaDetails, $existingContent, $techData, $creativeData, $lightweightMediaId, $onSuccess, $onError);
+                casiel_log('audio_processor', "Step 9/10: Versión ligera subida.", ['content_id' => $contentId, 'media_id' => $lightweightMediaId]);
+                $this->step10_updateContent($contentId, $mediaDetails, $existingContent, $audioHash, $techData, $creativeData, $lightweightMediaId, $onSuccess, $onError);
             },
             $onError
         );
     }
 
-    private function step8_updateContent(int $contentId, array $mediaDetails, array $existingContent, array $techData, array $creativeData, int $lightweightMediaId, callable $onSuccess, callable $onError): void
+    private function step10_updateContent(int $contentId, array $mediaDetails, array $existingContent, string $audioHash, array $techData, array $creativeData, int $lightweightMediaId, callable $onSuccess, callable $onError): void
     {
         $casielGeneratedData = array_merge(
             $techData,
             $creativeData,
             [
                 'casiel_status' => 'success',
+                'audio_hash' => $audioHash, // <-- Guardar el hash
                 'original_media_id' => $mediaDetails['id'],
                 'light_media_id' => $lightweightMediaId,
                 'original_filename' => $mediaDetails['metadata']['original_name'] ?? null,
@@ -168,7 +223,7 @@ class AudioWorkflowService
             $contentId,
             $finalPayload,
             function () use ($contentId, $onSuccess) {
-                casiel_log('audio_processor', "Step 8/8: Contenido {$contentId} actualizado. ¡Éxito!", [], 'info');
+                casiel_log('audio_processor', "Step 10/10: Contenido {$contentId} actualizado. ¡Éxito!", [], 'info');
                 $onSuccess();
             },
             $onError
