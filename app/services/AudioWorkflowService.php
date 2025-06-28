@@ -36,6 +36,18 @@ class AudioWorkflowService
             $contentId,
             function ($existingContent) use ($contentId, $mediaId, $onSuccess, $onError) {
                 casiel_log('audio_processor', "Step 1/X: Contenido existente obtenido.", ['content_id' => $contentId]);
+                
+                // DEBUG: Log para ver qué se está recibiendo exactamente de la API de Sword.
+                casiel_log(
+                    'audio_processor',
+                    "DEBUG: Contenido completo obtenido de Sword API.",
+                    [
+                        'content_id' => $contentId,
+                        'fetched_content' => $existingContent
+                    ],
+                    'debug'
+                );
+
                 $this->step2_getMediaDetails($contentId, $mediaId, $existingContent, $onSuccess, $onError);
             },
             $onError
@@ -95,7 +107,8 @@ class AudioWorkflowService
             function ($duplicateContent) use ($contentId, $localPath, $mediaDetails, $existingContent, $audioHash, $onSuccess, $onError) {
                 if ($duplicateContent !== null) {
                     casiel_log('audio_processor', "Step 5/X: DUPLICADO ENCONTRADO. ID del original: {$duplicateContent['id']}", ['content_id' => $contentId]);
-                    $this->handleDuplicate($contentId, $mediaDetails, $duplicateContent, $onSuccess, $onError);
+                    // CORRECCIÓN: Pasar $existingContent a handleDuplicate para preservar sus datos.
+                    $this->handleDuplicate($contentId, $mediaDetails, $existingContent, $duplicateContent, $onSuccess, $onError);
                 } else {
                     casiel_log('audio_processor', "Step 5/X: No se encontraron duplicados. Continuando con el flujo normal.", ['content_id' => $contentId]);
                     $this->step6_analyzeTechnical($contentId, $localPath, $mediaDetails, $existingContent, $audioHash, $onSuccess, $onError);
@@ -105,19 +118,28 @@ class AudioWorkflowService
         );
     }
 
-    private function handleDuplicate(int $newContentId, array $newMediaDetails, array $duplicateContent, callable $onSuccess, callable $onError): void
+    // CORRECCIÓN: Firma del método cambiada para aceptar $existingContent.
+    private function handleDuplicate(int $newContentId, array $newMediaDetails, array $existingContent, array $duplicateContent, callable $onSuccess, callable $onError): void
     {
+        // CORRECCIÓN: Realizar una fusión de 3 vías para preservar todos los datos relevantes.
+        $newContentData = $existingContent['content_data'] ?? [];
+        $duplicateData = $duplicateContent['content_data'] ?? [];
+
+        $casielStatusData = [
+            'casiel_status' => 'duplicate',
+            'casiel_error' => null, // Limpia cualquier error previo
+            'duplicate_of_content_id' => $duplicateContent['id'],
+            'original_media_id' => $newMediaDetails['id'],
+            'original_filename' => $newMediaDetails['metadata']['original_name'] ?? null,
+        ];
+        
+        // 1. La base son los datos del nuevo item (prioridad para ediciones del usuario).
+        // 2. Se fusionan los datos del duplicado encontrado (aporta la metadata rica).
+        // 3. Se fusiona el estado final de Casiel.
+        $finalData = array_merge($newContentData, $duplicateData, $casielStatusData);
+
         $payload = [
-            'content_data' => array_merge(
-                $duplicateContent['content_data'] ?? [], // Reutiliza toda la data del duplicado
-                [
-                    'casiel_status' => 'duplicate',
-                    'casiel_error' => null, // Limpia cualquier error previo
-                    'duplicate_of_content_id' => $duplicateContent['id'],
-                    'original_media_id' => $newMediaDetails['id'], // Mantiene referencia al medio original de esta tarea
-                    'original_filename' => $newMediaDetails['metadata']['original_name'] ?? null,
-                ]
-            )
+            'content_data' => $finalData
         ];
 
         $this->swordApiService->updateContent(
@@ -195,14 +217,15 @@ class AudioWorkflowService
         );
     }
 
-   private function step10_updateContent(int $contentId, array $mediaDetails, array $existingContent, string $audioHash, array $techData, array $creativeData, int $lightweightMediaId, callable $onSuccess, callable $onError): void
+
+    private function step10_updateContent(int $contentId, array $mediaDetails, array $existingContent, string $audioHash, array $techData, array $creativeData, int $lightweightMediaId, callable $onSuccess, callable $onError): void
     {
         $casielGeneratedData = array_merge(
             $techData,
             $creativeData,
             [
                 'casiel_status' => 'success',
-                'audio_hash' => $audioHash, // <-- Guardar el hash
+                'audio_hash' => $audioHash,
                 'original_media_id' => $mediaDetails['id'],
                 'light_media_id' => $lightweightMediaId,
                 'original_filename' => $mediaDetails['metadata']['original_name'] ?? null,
@@ -210,11 +233,20 @@ class AudioWorkflowService
         );
 
         $existingContentData = $existingContent['content_data'] ?? [];
-        // SOLUCIÓN: Se reemplaza el operador de unión (+) con array_merge().
-        // Esto asegura que los datos existentes en el contenido (ej. un 'title' personalizado)
-        // se conserven. Los valores de `$casielGeneratedData` (segundo argumento) tienen
-        // prioridad y sobreescribirán cualquier clave que ya exista, logrando una
-        // actualización inteligente en lugar de un reemplazo destructivo.
+
+        // DEBUG: Log para verificar los datos justo antes de la fusión.
+        casiel_log(
+            'audio_processor',
+            "DEBUG: Verificando datos justo antes de la fusión final.",
+            [
+                'content_id' => $contentId,
+                '1_datos_existentes' => $existingContentData,
+                '2_datos_generados_casiel' => $casielGeneratedData
+            ],
+            'debug'
+        );
+        
+        // Usar array_merge para fusionar la data de forma segura.
         $finalContentData = array_merge($existingContentData, $casielGeneratedData);
 
         $newFileNameBase = $creativeData['nombre_archivo_base'] ?? "audio_sample_{$contentId}";
