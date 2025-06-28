@@ -4,6 +4,7 @@ use app\process\Http;
 use app\services\AudioAnalysisService;
 use app\services\AudioProcessingService;
 use app\services\AudioQueueConsumer;
+use app\services\FileHandlerService; // AÑADIDO
 use app\services\GeminiService;
 use app\services\RabbitMqService;
 use app\services\SwordApiService;
@@ -59,19 +60,19 @@ return [
     ],
     // RabbitMQ consumer process
     'audio_queue_consumer' => [
-        'handler' => AudioQueueConsumer::class, // Use the new one from app/services
+        'handler' => AudioQueueConsumer::class,
         'constructor' => [
             // Manually build the dependency graph for the process
             'rabbitMqService' => new RabbitMqService(),
             'audioProcessingService' => new AudioProcessingService(
                 new SwordApiService(new HttpClient()),
-                // SOLUTION: Inject the python and ffmpeg commands here as well.
                 new AudioAnalysisService(
                     getenv('PYTHON_COMMAND') ?: 'python3',
                     base_path('audio.py'),
                     getenv('FFMPEG_PATH') ?: 'ffmpeg'
                 ),
-                new GeminiService(new HttpClient())
+                new GeminiService(new HttpClient()),
+                new FileHandlerService() // MODIFICADO: Inyectar el nuevo servicio
             ),
         ]
     ]
