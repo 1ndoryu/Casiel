@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Start file for windows
  */
@@ -73,31 +74,42 @@ use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
 use Webman\Config;
 use support\App;
+use Dotenv\Dotenv;
 
 ini_set('display_errors', 'on');
 error_reporting(E_ALL);
 
+// ==========================================================
+// SOLUCIÓN: Cargar .env dentro del proceso hijo para Windows.
+// Esto asegura que getenv() funcione al instanciar servicios.
+// ==========================================================
+if (class_exists('Dotenv\Dotenv') && file_exists(__DIR__ . '/../../.env')) {
+    if (method_exists('Dotenv\Dotenv', 'createUnsafeImmutable')) {
+        Dotenv::createUnsafeImmutable(__DIR__ . '/../..')->load();
+    } else {
+        Dotenv::createMutable(__DIR__ . '/../..')->load();
+    }
+}
+
 if (is_callable('opcache_reset')) {
-    opcache_reset();
+  opcache_reset();
 }
 
 if (!\$appConfigFile = config_path('app.php')) {
-    throw new RuntimeException('Config file not found: app.php');
+  throw new RuntimeException('Config file not found: app.php');
 }
 \$appConfig = require \$appConfigFile;
 if (\$timezone = \$appConfig['default_timezone'] ?? '') {
-    date_default_timezone_set(\$timezone);
+  date_default_timezone_set(\$timezone);
 }
 
-// SOLUCIÓN: Cargar TODA la configuración, no solo las rutas.
-// Se cambió ['route'] por un array vacío [].
 App::loadAllConfig([]);
 
 worker_start('$processParam', $configParam);
 
 if (DIRECTORY_SEPARATOR != "/") {
-    Worker::\$logFile = config('server')['log_file'] ?? Worker::\$logFile;
-    TcpConnection::\$defaultMaxPackageSize = config('server')['max_package_size'] ?? 10*1024*1024;
+  Worker::\$logFile = config('server')['log_file'] ?? Worker::\$logFile;
+  TcpConnection::\$defaultMaxPackageSize = config('server')['max_package_size'] ?? 10*1024*1024;
 }
 
 Worker::runAll();
