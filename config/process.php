@@ -1,12 +1,14 @@
 <?php
 
+use app\process\Http;
+use app\services\AudioAnalysisService;
+use app\services\AudioProcessingService;
+use app\services\AudioQueueConsumer;
+use app\services\GeminiService;
+use app\services\RabbitMqService;
+use app\services\SwordApiService;
 use support\Log;
 use support\Request;
-use app\process\Http;
-use app\process\AudioQueueConsumer;
-use app\services\SwordApiService;
-use app\services\AudioAnalysisService;
-use app\services\GeminiService;
 use Workerman\Http\Client as HttpClient;
 
 global $argv;
@@ -57,13 +59,16 @@ return [
     ],
     // RabbitMQ consumer process
     'audio_queue_consumer' => [
-        'handler' => AudioQueueConsumer::class,
+        'handler' => AudioQueueConsumer::class, // Use the new one from app/services
         'constructor' => [
-            // Instantiate dependencies manually for the process
-            'swordApiService' => new SwordApiService(new HttpClient()),
-            'audioAnalysisService' => new AudioAnalysisService(base_path('audio.py')),
-            'geminiService' => new GeminiService(new HttpClient()),
-            'httpClient' => new HttpClient() // Inject the http client for downloads
+            // Manually build the dependency graph for the process
+            'rabbitMqService' => new RabbitMqService(),
+            'audioProcessingService' => new AudioProcessingService(
+                new SwordApiService(new HttpClient()),
+                new AudioAnalysisService(base_path('audio.py')),
+                new GeminiService(new HttpClient()),
+                new HttpClient()
+            ),
         ]
     ]
 ];
