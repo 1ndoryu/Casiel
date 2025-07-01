@@ -66,19 +66,9 @@ class SwordApiService
     public function getContent(int $contentId, callable $onSuccess, callable $onError): void
     {
         casiel_log('sword_api', "Obteniendo detalles del contenido: {$contentId}");
-        // NOTA: Este endpoint debe existir en Sword y permitir acceso de administrador
-        // para obtener cualquier contenido por ID, sin importar su estado.
         $this->authenticatedRequest('get', "admin/contents/{$contentId}", [], fn($res) => $onSuccess($res['data'] ?? $res), $onError);
     }
-    
-    /**
-     * Finds content by its perceptual audio hash.
-     * The Sword API is expected to return a 200 OK with `data: null` if not found.
-     *
-     * @param string $hash The audio hash to search for.
-     * @param callable $onSuccess Callback that receives the content data or null.
-     * @param callable $onError Error callback.
-     */
+
     public function findContentByHash(string $hash, callable $onSuccess, callable $onError): void
     {
         casiel_log('sword_api', "Buscando contenido por hash: {$hash}");
@@ -111,13 +101,10 @@ class SwordApiService
             return;
         }
 
-        // Para cURL, pasamos la ruta. Para HttpClient, el contenido. El trait no maneja esto.
-        // Haremos una excepción para la subida de archivos para mantener la compatibilidad.
         if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-            // El trait de cURL espera una estructura específica para 'multipart'.
             $options = ['multipart' => [['name' => 'file', 'contents' => $filePath, 'filename' => basename($filePath)]]];
         } else {
-             $options = ['multipart' => [['name' => 'file', 'contents' => file_get_contents($filePath), 'filename' => basename($filePath)]]];
+            $options = ['multipart' => [['name' => 'file', 'contents' => file_get_contents($filePath), 'filename' => basename($filePath)]]];
         }
 
         $this->authenticatedRequest('post', 'media', $options, fn($res) => $onSuccess($res['data'] ?? $res), $onError);
@@ -137,7 +124,8 @@ class SwordApiService
     {
         casiel_log('sword_api', 'Usando HttpClient para la descarga.');
         $this->httpClient->get($fileUrl, [
-            'sink' => $destinationPath, 'timeout' => 300,
+            'sink' => $destinationPath,
+            'timeout' => 300,
         ], function ($response) use ($onSuccess, $onError, $destinationPath) {
             if (!$response) {
                 $onError("Fallo de conexión en la descarga (respuesta nula).");
@@ -185,5 +173,17 @@ class SwordApiService
         } catch (Throwable $e) {
             $onError("Excepción al iniciar proceso cURL de descarga: " . $e->getMessage());
         }
+    }
+
+    public function notifyProcessingComplete(int $contentId, array $metadata, callable $onSuccess, callable $onError): void
+    {
+        casiel_log('sword_api', "Notificando a Sword sobre la finalización del procesamiento para el contenido: {$contentId}");
+        $payload = [
+            'content_id' => $contentId,
+            'metadata' => $metadata
+        ];
+        $endpoint = '/webhooks/casiel/processed';
+
+        $this->authenticatedRequest('POST', $endpoint, ['json' => $payload], fn($res) => $onSuccess($res['data'] ?? $res), $onError);
     }
 }
