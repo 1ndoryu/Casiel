@@ -1,9 +1,16 @@
 <?php
 
 use app\process\Http;
+use app\services\AudioAnalysisService;
+use app\services\AudioProcessingService;
 use app\services\AudioQueueConsumer;
+use app\services\FileHandlerService; // AÑADIDO
+use app\services\GeminiService;
+use app\services\RabbitMqService;
+use app\services\SwordApiService;
 use support\Log;
 use support\Request;
+use Workerman\Http\Client as HttpClient;
 
 global $argv;
 
@@ -53,7 +60,20 @@ return [
     ],
     // RabbitMQ consumer process
     'audio_queue_consumer' => [
-        'handler' => \app\services\AudioQueueConsumer::class,
-        'count'   => 1, // Usualmente 1 es suficiente para empezar.
+        'handler' => AudioQueueConsumer::class,
+        'constructor' => [
+            // Manually build the dependency graph for the process
+            'rabbitMqService' => new RabbitMqService(),
+            'audioProcessingService' => new AudioProcessingService(
+                new SwordApiService(new HttpClient()),
+                new AudioAnalysisService(
+                    getenv('PYTHON_COMMAND') ?: 'python3',
+                    base_path('audio.py'),
+                    getenv('FFMPEG_PATH') ?: 'ffmpeg'
+                ),
+                new GeminiService(new HttpClient()),
+                new FileHandlerService() // MODIFICADO: Inyectar el nuevo servicio
+            ),
+        ]
     ]
 ];
